@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}音声生成 – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/">ホーム</a> / <a href="/projects/{{ project.id }}">{{ project.name }}</a> / 音声生成</div>
+
+<div class="page-header">
+  <h1>音声生成・結合</h1>
+</div>
+
+<div class="render-stats">
+  <div class="stat-box">
+    <div class="stat-value" id="totalCount">{{ total_segments }}</div>
+    <div class="stat-label">総セグメント</div>
+  </div>
+  <div class="stat-box stat-success">
+    <div class="stat-value" id="doneCount">{{ done_segments }}</div>
+    <div class="stat-label">生成済み</div>
+  </div>
+  <div class="stat-box stat-error">
+    <div class="stat-value" id="failedCount">{{ failed_segments }}</div>
+    <div class="stat-label">失敗</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-value" id="pendingCount">{{ total_segments - done_segments - failed_segments }}</div>
+    <div class="stat-label">未処理</div>
+  </div>
+</div>
+
+{% if job %}
+<div class="render-job-card">
+  <div class="job-header">
+    <span>最新ジョブ: <code>{{ job.id[:8] }}</code></span>
+    <span class="badge badge-{{ job.status }}" id="jobStatus">{{ job.status }}</span>
+  </div>
+  <div class="progress-bar-wrap">
+    <div class="progress-bar" id="progressBar"
+         style="width: {{ (job.done_segments / job.total_segments * 100) | int if job.total_segments > 0 else 0 }}%">
+    </div>
+  </div>
+  <p class="text-small" id="jobDetail">
+    {{ job.done_segments }} / {{ job.total_segments }} 完了
+    {% if job.failed_segments %}, {{ job.failed_segments }} 失敗{% endif %}
+  </p>
+</div>
+{% endif %}
+
+<div class="render-actions">
+  <button class="btn btn-primary btn-lg" onclick="startRender()">▶ 音声生成開始</button>
+  <button class="btn btn-secondary" onclick="retryFailed()">🔁 失敗を再試行</button>
+  <button class="btn btn-secondary" onclick="mergeAudio()">🔗 音声を結合</button>
+</div>
+
+<div id="actionStatus" class="save-status hidden"></div>
+
+{% if artifacts %}
+<div class="artifacts-section">
+  <h2>生成ファイル</h2>
+  <table class="artifacts-table">
+    <thead>
+      <tr><th>種別</th><th>ファイル</th><th>フォーマット</th><th>長さ</th><th>サイズ</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      {% for art in artifacts %}
+      <tr>
+        <td>
+          {% if art.artifact_type == 'full' %}<span class="badge badge-done">FULL</span>
+          {% elif art.artifact_type == 'chapter' %}<span class="badge badge-segmented">CH{{ art.chapter_index }}</span>
+          {% else %}{{ art.artifact_type }}{% endif %}
+        </td>
+        <td><code>{{ art.file_path.split('/')[-1] }}</code></td>
+        <td>{{ art.file_format }}</td>
+        <td>{{ "%.1f"|format(art.duration_seconds) if art.duration_seconds else '-' }}s</td>
+        <td>{{ "%.1f"|format(art.file_size_bytes / 1024 / 1024) if art.file_size_bytes else '-' }}MB</td>
+        <td>
+          <a href="/artifacts/download/{{ project.id }}/{{ art.file_path.split('/')[-1] }}" class="btn btn-sm btn-outline" download>
+            ⬇ ダウンロード
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const projectId = '{{ project.id }}';
+let pollInterval = null;
+
+function setStatus(msg, type='info') {
+  const el = document.getElementById('actionStatus');
+  el.textContent = msg;
+  el.className = `save-status ${type === 'error' ? 'error' : type === 'success' ? 'success' : ''}`;
+  if (el.className === 'save-status ') el.className = 'save-status';
+}
+
+async function startRender() {
+  setStatus('生成ジョブを投入中...');
+  const res = await fetch(`/api/projects/${projectId}/render?skip_done=true`, {method:'POST'});
+  if (res.ok) {
+    const job = await res.json();
+    setStatus(`ジョブ開始: ${job.id.substring(0,8)}`, 'success');
+    startPolling();
+  } else {
+    const e = await res.json();
+    setStatus('失敗: ' + JSON.stringify(e.detail), 'error');
+  }
+}
+
+async function retryFailed() {
+  const res = await fetch(`/api/projects/${projectId}/render/retry_failed`, {method:'POST'});
+  if (res.ok) {
+    const d = await res.json();
+    setStatus(`${d.reset} 件リセットしました。再度「生成開始」を押してください`, 'success');
+  }
+}
+
+async function mergeAudio() {
+  setStatus('結合中...');
+  const res = await fetch(`/api/projects/${projectId}/merge`, {method:'POST'});
+  if (res.ok) {
+    const d = await res.json();
+    setStatus(`結合完了: ${d.artifacts.length} ファイル生成`, 'success');
+    setTimeout(() => location.reload(), 1200);
+  } else {
+    const e = await res.json();
+    setStatus('結合失敗: ' + JSON.stringify(e.detail), 'error');
+  }
+}
+
+async function pollStatus() {
+  const res = await fetch(`/api/projects/${projectId}/render/status`);
+  if (!res.ok) return;
+  const job = await res.json();
+  if (!job) return;
+
+  document.getElementById('jobStatus').textContent = job.status;
+  document.getElementById('jobStatus').className = `badge badge-${job.status}`;
+  document.getElementById('jobDetail').textContent =
+    `${job.done_segments} / ${job.total_segments} 完了${job.failed_segments ? ', ' + job.failed_segments + ' 失敗' : ''}`;
+
+  const pct = job.total_segments > 0 ? Math.round(job.done_segments / job.total_segments * 100) : 0;
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('doneCount').textContent = job.done_segments;
+  document.getElementById('failedCount').textContent = job.failed_segments;
+
+  if (job.status === 'done' || job.status === 'error') {
+    clearInterval(pollInterval);
+    pollInterval = null;
+    setStatus(job.status === 'done' ? '✓ 生成完了！「音声を結合」を押してください' : '⚠ エラー発生', job.status === 'done' ? 'success' : 'error');
+    setTimeout(() => location.reload(), 2000);
+  }
+}
+
+function startPolling() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(pollStatus, 2000);
+}
+
+// Auto-poll if job is running
+{% if job and job.status in ['pending', 'running'] %}
+document.addEventListener('DOMContentLoaded', startPolling);
+{% endif %}
+</script>
+{% endblock %}

@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} – NovelConverter{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/">ホーム</a> / {{ project.name }}</div>
+
+<div class="page-header">
+  <h1>{{ project.name }}</h1>
+  <span class="badge badge-{{ project.status }}">{{ project.status }}</span>
+</div>
+
+<div class="stats-row">
+  <div class="stat-box">
+    <div class="stat-value">{{ seg_count }}</div>
+    <div class="stat-label">セグメント数</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-value">{{ sp_count }}</div>
+    <div class="stat-label">話者数</div>
+  </div>
+</div>
+
+<div class="step-flow">
+  <!-- Step 1: Upload -->
+  <div class="step-card {{ 'step-done' if project.raw_text_path else 'step-current' }}">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <h3>テキストアップロード</h3>
+      {% if project.raw_text_path %}
+        <p class="text-success">✓ アップロード済み</p>
+        <p class="text-small">{{ project.raw_text_path.split('/')[-1] }}</p>
+      {% else %}
+        <form id="uploadForm" enctype="multipart/form-data">
+          <input type="file" id="txtFile" accept=".txt" class="input">
+          <button type="button" class="btn btn-primary" onclick="uploadText()">アップロード</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Step 2: Preprocess -->
+  <div class="step-card {{ 'step-done' if project.status in ['preprocessed','segmented','rendering','done'] else '' }}">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <h3>前処理</h3>
+      <p class="text-muted">テキストを段落・セグメントに分割します</p>
+      <button class="btn btn-primary" onclick="runPreprocess()" {{ 'disabled' if not project.raw_text_path }}>前処理実行</button>
+      <span id="preprocessStatus" class="status-inline"></span>
+    </div>
+  </div>
+
+  <!-- Step 3: Speaker segmentation -->
+  <div class="step-card {{ 'step-done' if project.status in ['segmented','rendering','done'] else '' }}">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <h3>話者分割</h3>
+      <p class="text-muted">ルールベース + LLM で話者を推定します</p>
+      <button class="btn btn-primary" onclick="runSegment()" {{ 'disabled' if project.status not in ['preprocessed','segmented','rendering','done'] }}>話者分割実行</button>
+      <span id="segmentStatus" class="status-inline"></span>
+    </div>
+  </div>
+
+  <!-- Step 4: Edit -->
+  <div class="step-card">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <h3>セグメント確認・修正</h3>
+      <a href="/projects/{{ project.id }}/segments" class="btn btn-outline" {{ 'disabled' if seg_count == 0 }}>セグメント一覧を開く →</a>
+    </div>
+  </div>
+
+  <!-- Step 5: Voice mapping -->
+  <div class="step-card">
+    <div class="step-num">5</div>
+    <div class="step-body">
+      <h3>音声設定</h3>
+      <a href="/projects/{{ project.id }}/voice_mapping" class="btn btn-outline" {{ 'disabled' if sp_count == 0 }}>音声割当を開く →</a>
+    </div>
+  </div>
+
+  <!-- Step 6: Render -->
+  <div class="step-card">
+    <div class="step-num">6</div>
+    <div class="step-body">
+      <h3>音声生成・結合</h3>
+      <a href="/projects/{{ project.id }}/render" class="btn btn-outline">生成画面を開く →</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const projectId = '{{ project.id }}';
+
+async function uploadText() {
+  const file = document.getElementById('txtFile').files[0];
+  if (!file) { alert('ファイルを選択してください'); return; }
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch(`/api/projects/${projectId}/upload_text`, { method: 'POST', body: fd });
+  if (res.ok) { location.reload(); }
+  else { const e = await res.json(); alert('アップロード失敗: ' + JSON.stringify(e.detail)); }
+}
+
+async function runPreprocess() {
+  const el = document.getElementById('preprocessStatus');
+  el.textContent = '実行中...';
+  const res = await fetch(`/api/projects/${projectId}/preprocess`, { method: 'POST' });
+  if (res.ok) {
+    const d = await res.json();
+    el.textContent = `完了: ${d.segment_count} セグメント`;
+    setTimeout(() => location.reload(), 800);
+  } else {
+    const e = await res.json();
+    el.textContent = '失敗: ' + JSON.stringify(e.detail);
+    el.style.color = 'red';
+  }
+}
+
+async function runSegment() {
+  const el = document.getElementById('segmentStatus');
+  el.textContent = '実行中...';
+  const res = await fetch(`/api/projects/${projectId}/segment_speakers`, { method: 'POST' });
+  if (res.ok) {
+    const d = await res.json();
+    el.textContent = `完了: ${d.speaker_count} 話者`;
+    setTimeout(() => location.reload(), 800);
+  } else {
+    const e = await res.json();
+    el.textContent = '失敗: ' + JSON.stringify(e.detail);
+    el.style.color = 'red';
+  }
+}
+</script>
+{% endblock %}

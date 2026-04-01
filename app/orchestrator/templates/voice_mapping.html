@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}音声設定 – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/">ホーム</a> / <a href="/projects/{{ project.id }}">{{ project.name }}</a> / 音声設定</div>
+
+<div class="page-header">
+  <h1>話者ごとの音声設定</h1>
+  <div class="header-actions">
+    <button class="btn btn-primary" onclick="saveAllMappings()">すべて保存</button>
+    <a href="/projects/{{ project.id }}/render" class="btn btn-outline">次: 音声生成 →</a>
+  </div>
+</div>
+
+<p class="text-muted">各話者にTTSワーカーと音声パラメータを割り当ててください。</p>
+
+<div id="voiceMappings">
+{% for entry in speaker_profiles %}
+{% set sp = entry.speaker %}
+{% set vp = entry.profile %}
+<div class="voice-card" data-speaker-id="{{ sp.id }}">
+  <div class="voice-card-header">
+    <div>
+      <strong>{{ sp.name }}</strong>
+      <span class="text-muted">({{ sp.segment_count }} セグメント)</span>
+    </div>
+    <button class="btn btn-sm btn-outline" onclick="testVoice('{{ sp.id }}', '{{ sp.name }}')">🔊 テスト生成</button>
+  </div>
+
+  <div class="voice-card-body">
+    <div class="form-grid">
+      <label>ワーカー
+        <select class="input vm-worker" data-field="worker_type">
+          <option value="custom" {{ 'selected' if not vp or vp.worker_type == 'custom' }}>custom</option>
+          <option value="base" {{ 'selected' if vp and vp.worker_type == 'base' }}>base (clone)</option>
+          <option value="design" {{ 'selected' if vp and vp.worker_type == 'design' }}>design</option>
+        </select>
+      </label>
+      <label>言語
+        <input type="text" class="input vm-field" data-field="language" value="{{ vp.language if vp else 'ja' }}">
+      </label>
+      <label>スピード
+        <input type="number" class="input vm-field" data-field="speed" value="{{ vp.speed if vp else 1.0 }}" step="0.1" min="0.5" max="2.0">
+      </label>
+      <label>前無音 (ms)
+        <input type="number" class="input vm-field" data-field="pause_ms_before" value="{{ vp.pause_ms_before if vp else 0 }}" min="0">
+      </label>
+      <label>後無音 (ms)
+        <input type="number" class="input vm-field" data-field="pause_ms_after" value="{{ vp.pause_ms_after if vp else 300 }}" min="0">
+      </label>
+      <label>音量調整 (dB)
+        <input type="number" class="input vm-field" data-field="volume_gain_db" value="{{ vp.volume_gain_db if vp else 0.0 }}" step="0.5">
+      </label>
+    </div>
+
+    <div class="voice-mode-section">
+      <label>Speaker名 (custom用)
+        <input type="text" class="input vm-field" data-field="speaker_name" value="{{ vp.speaker_name if vp and vp.speaker_name else '' }}" placeholder="例: Aria">
+      </label>
+      <label>Instruct (custom用)
+        <input type="text" class="input vm-field" data-field="instruct" value="{{ vp.instruct if vp and vp.instruct else '' }}" placeholder="例: 明るく元気に">
+      </label>
+    </div>
+
+    <div class="voice-mode-section">
+      <label>Voice Description (design用)
+        <textarea class="input vm-field" data-field="voice_description" rows="2" placeholder="例: 20歳の女性、明るく元気な声">{{ vp.voice_description if vp and vp.voice_description else '' }}</textarea>
+      </label>
+    </div>
+
+    <div class="voice-mode-section">
+      <label>参照音声パス (base clone用)
+        <input type="text" class="input vm-field" data-field="reference_audio_path" value="{{ vp.reference_audio_path if vp and vp.reference_audio_path else '' }}" placeholder="/path/to/reference.wav">
+      </label>
+      <label>参照テキスト (base clone用)
+        <input type="text" class="input vm-field" data-field="reference_text" value="{{ vp.reference_text if vp and vp.reference_text else '' }}" placeholder="参照音声のテキスト">
+      </label>
+    </div>
+  </div>
+  <audio id="test-audio-{{ sp.id }}" style="display:none"></audio>
+</div>
+{% endfor %}
+</div>
+
+<div id="saveStatus" class="save-status hidden"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const projectId = '{{ project.id }}';
+
+function getCardData(card) {
+  const speakerId = card.dataset.speakerId;
+  const data = { speaker_id: speakerId, profile: {} };
+  card.querySelectorAll('[data-field]').forEach(el => {
+    const field = el.dataset.field;
+    const val = el.tagName === 'SELECT' ? el.value : el.value;
+    data.profile[field] = val;
+  });
+  // type coerce
+  ['speed','pause_ms_before','pause_ms_after','volume_gain_db'].forEach(f => {
+    if (data.profile[f] !== undefined) data.profile[f] = parseFloat(data.profile[f]) || 0;
+  });
+  return data;
+}
+
+async function saveAllMappings() {
+  const cards = document.querySelectorAll('.voice-card');
+  const mappings = Array.from(cards).map(getCardData);
+  const res = await fetch(`/api/projects/${projectId}/voice_mappings`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({mappings})
+  });
+  const status = document.getElementById('saveStatus');
+  if (res.ok) {
+    const d = await res.json();
+    status.textContent = `✓ ${d.updated} 話者の設定を保存しました`;
+    status.className = 'save-status success';
+    setTimeout(() => status.className = 'save-status hidden', 3000);
+  } else {
+    status.textContent = '保存失敗';
+    status.className = 'save-status error';
+  }
+}
+
+async function testVoice(speakerId, speakerName) {
+  // save current first
+  const card = document.querySelector(`.voice-card[data-speaker-id="${speakerId}"]`);
+  const data = getCardData(card);
+  await fetch(`/api/projects/${projectId}/voice_mappings`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({mappings: [data]})
+  });
+
+  // find sample text from a segment
+  const testText = `${speakerName}の声のテストです。よろしくお願いします。`;
+  const workerType = data.profile.worker_type || 'custom';
+  const workerUrls = {custom: 'http://localhost:8002', base: 'http://localhost:8001', design: 'http://localhost:8003'};
+  const url = workerUrls[workerType];
+
+  try {
+    const res = await fetch(`${url}/synthesize`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        text: testText,
+        mode: workerType === 'base' ? 'clone' : workerType,
+        language: data.profile.language || 'ja',
+        speaker: data.profile.speaker_name || null,
+        instruct: data.profile.instruct || null,
+        voice_description: data.profile.voice_description || null,
+        speed: parseFloat(data.profile.speed) || 1.0,
+        output_path: null
+      })
+    });
+    if (res.ok) {
+      const result = await res.json();
+      if (result.success && result.output_path) {
+        const audio = document.getElementById(`test-audio-${speakerId}`);
+        audio.src = result.output_path;
+        audio.style.display = 'block';
+        audio.play().catch(() => {});
+        alert(`生成完了: ${result.output_path}`);
+      } else {
+        alert(`生成失敗: ${result.error}`);
+      }
+    } else {
+      alert(`ワーカーへの接続失敗 (${url})`);
+    }
+  } catch(e) {
+    alert(`接続エラー: ${e.message}\nワーカーが起動しているか確認してください`);
+  }
+}
+</script>
+{% endblock %}

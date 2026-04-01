@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv_orchestrator/
+.venv_tts_base/
+.venv_tts_custom/
+.venv_tts_design/
+.venv/
+venv/
+env/
+
+# Data (generated)
+data/projects/
+data/outputs/
+data/temp/
+data/logs/
+data/novelconverter.db
+
+# Keep directory structure
+!data/projects/.gitkeep
+!data/outputs/.gitkeep
+!data/temp/.gitkeep
+!data/references/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

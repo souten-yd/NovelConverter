@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}セグメント確認 – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/">ホーム</a> / <a href="/projects/{{ project.id }}">{{ project.name }}</a> / セグメント</div>
+
+<div class="page-header">
+  <h1>セグメント確認・修正</h1>
+  <div class="header-actions">
+    <button class="btn btn-primary" onclick="saveAll()">変更を保存</button>
+    <a href="/projects/{{ project.id }}/voice_mapping" class="btn btn-outline">次: 音声設定 →</a>
+  </div>
+</div>
+
+<div class="filter-bar">
+  <label>フィルター:
+    <select id="filterSpeaker" onchange="applyFilter()">
+      <option value="">全話者</option>
+      <option value="unknown">unknown のみ</option>
+      {% set speakers = [] %}
+      {% for seg in segments %}
+        {% if seg.predicted_speaker not in speakers %}
+          {% set _ = speakers.append(seg.predicted_speaker) %}
+        {% endif %}
+      {% endfor %}
+      {% for sp in speakers | sort %}
+        <option value="{{ sp }}">{{ sp }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>信頼度:
+    <select id="filterConf" onchange="applyFilter()">
+      <option value="">全て</option>
+      <option value="low">低(&lt;0.5)</option>
+      <option value="mid">中(0.5-0.79)</option>
+      <option value="high">高(≥0.8)</option>
+    </select>
+  </label>
+  <span id="visibleCount" class="text-muted"></span>
+</div>
+
+<div id="segmentTable">
+{% for seg in segments %}
+<div class="seg-row conf-{{ 'low' if seg.confidence < 0.5 else ('mid' if seg.confidence < 0.8 else 'high') }}"
+     data-speaker="{{ seg.predicted_speaker }}"
+     data-conf="{{ seg.confidence }}"
+     data-id="{{ seg.id }}">
+  <div class="seg-meta">
+    <span class="seg-order">#{{ seg.order_index }}</span>
+    <span class="seg-type badge badge-type-{{ seg.segment_type }}">{{ seg.segment_type }}</span>
+    <span class="seg-conf conf-badge-{{ 'low' if seg.confidence < 0.5 else ('mid' if seg.confidence < 0.8 else 'high') }}">
+      {{ "%.0f"|format(seg.confidence * 100) }}%
+    </span>
+    <span class="seg-chap">章{{ seg.chapter_index }}</span>
+  </div>
+  <div class="seg-text">{{ seg.normalized_text }}</div>
+  <div class="seg-controls">
+    <div class="control-group">
+      <label>推定話者: <strong>{{ seg.predicted_speaker }}</strong></label>
+      <label>確定話者:
+        <input type="text"
+               class="input input-sm final-speaker-input"
+               data-seg-id="{{ seg.id }}"
+               value="{{ seg.final_speaker or '' }}"
+               placeholder="{{ seg.predicted_speaker }}">
+      </label>
+    </div>
+    <div class="control-group">
+      <label>type:
+        <select class="input input-sm seg-type-select" data-seg-id="{{ seg.id }}">
+          {% for t in ['narration','dialogue','thought','unknown'] %}
+          <option value="{{ t }}" {{ 'selected' if seg.segment_type == t }}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    {% if seg.output_audio_path %}
+    <div class="control-group">
+      <button class="btn btn-sm btn-audio" onclick="playAudio('{{ seg.id }}', '{{ seg.output_audio_path.split('/')[-1] }}', '{{ project.id }}')">▶ 試聴</button>
+      <audio id="audio-{{ seg.id }}" style="display:none"></audio>
+    </div>
+    {% endif %}
+  </div>
+  <div class="seg-reason text-small text-muted">{{ seg.reason }}</div>
+</div>
+{% endfor %}
+</div>
+
+<div id="saveStatus" class="save-status hidden"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const projectId = '{{ project.id }}';
+const pendingChanges = {};
+
+document.querySelectorAll('.final-speaker-input').forEach(input => {
+  input.addEventListener('input', () => {
+    pendingChanges[input.dataset.segId] = pendingChanges[input.dataset.segId] || {};
+    pendingChanges[input.dataset.segId].final_speaker = input.value;
+    pendingChanges[input.dataset.segId].id = input.dataset.segId;
+  });
+});
+
+document.querySelectorAll('.seg-type-select').forEach(sel => {
+  sel.addEventListener('change', () => {
+    pendingChanges[sel.dataset.segId] = pendingChanges[sel.dataset.segId] || {};
+    pendingChanges[sel.dataset.segId].segment_type = sel.value;
+    pendingChanges[sel.dataset.segId].id = sel.dataset.segId;
+  });
+});
+
+async function saveAll() {
+  const updates = Object.values(pendingChanges).filter(u => u.id);
+  if (!updates.length) { alert('変更はありません'); return; }
+  const res = await fetch(`/api/projects/${projectId}/segments/update`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({updates})
+  });
+  const status = document.getElementById('saveStatus');
+  if (res.ok) {
+    const d = await res.json();
+    status.textContent = `✓ ${d.updated} 件保存しました`;
+    status.className = 'save-status success';
+    Object.keys(pendingChanges).forEach(k => delete pendingChanges[k]);
+    setTimeout(() => status.className = 'save-status hidden', 3000);
+  } else {
+    status.textContent = '保存失敗';
+    status.className = 'save-status error';
+  }
+}
+
+function applyFilter() {
+  const spFilter = document.getElementById('filterSpeaker').value;
+  const confFilter = document.getElementById('filterConf').value;
+  let visible = 0;
+  document.querySelectorAll('.seg-row').forEach(row => {
+    const sp = row.dataset.speaker;
+    const conf = parseFloat(row.dataset.conf);
+    let show = true;
+    if (spFilter && sp !== spFilter) show = false;
+    if (confFilter === 'low' && conf >= 0.5) show = false;
+    if (confFilter === 'mid' && (conf < 0.5 || conf >= 0.8)) show = false;
+    if (confFilter === 'high' && conf < 0.8) show = false;
+    row.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  document.getElementById('visibleCount').textContent = `${visible} 件表示`;
+}
+
+function playAudio(segId, filename, projectId) {
+  const audio = document.getElementById(`audio-${segId}`);
+  audio.src = `/segments/audio/${projectId}/${filename}`;
+  audio.style.display = 'block';
+  audio.play();
+}
+
+// init count
+document.addEventListener('DOMContentLoaded', () => {
+  const count = document.querySelectorAll('.seg-row').length;
+  document.getElementById('visibleCount').textContent = `${count} 件表示`;
+});
+</script>
+{% endblock %}

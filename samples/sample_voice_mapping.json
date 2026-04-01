@@ -1,0 +1,60 @@
+{
+  "_comment": "Sample voice mapping configuration for the sample novel",
+  "project_id": "example-project-001",
+  "mappings": [
+    {
+      "speaker_name": "narrator",
+      "worker_type": "custom",
+      "language": "ja",
+      "speaker_name_tts": "Aria",
+      "instruct": "落ち着いた語り口で、ゆっくり丁寧に",
+      "speed": 0.95,
+      "pause_ms_before": 0,
+      "pause_ms_after": 400,
+      "volume_gain_db": 0.0
+    },
+    {
+      "speaker_name": "アキラ",
+      "worker_type": "design",
+      "language": "ja",
+      "voice_description": "17歳の男子高校生。少し内気で思慮深い声。中程度の音域。",
+      "speed": 1.0,
+      "pause_ms_before": 0,
+      "pause_ms_after": 250,
+      "volume_gain_db": 0.0
+    },
+    {
+      "speaker_name": "サクラ",
+      "worker_type": "custom",
+      "language": "ja",
+      "speaker_name_tts": "Charlotte",
+      "instruct": "元気で明るい女子高校生。少し早口気味",
+      "speed": 1.05,
+      "pause_ms_before": 0,
+      "pause_ms_after": 200,
+      "volume_gain_db": 0.5
+    },
+    {
+      "speaker_name": "ケンジ",
+      "worker_type": "custom",
+      "language": "ja",
+      "speaker_name_tts": "Brian",
+      "instruct": "普通の男子高校生",
+      "speed": 1.0,
+      "pause_ms_before": 0,
+      "pause_ms_after": 250,
+      "volume_gain_db": 0.0
+    },
+    {
+      "speaker_name": "ヒデオ",
+      "worker_type": "custom",
+      "language": "ja",
+      "speaker_name_tts": "George",
+      "instruct": "背が高く、落ち着いた低めの声",
+      "speed": 0.98,
+      "pause_ms_before": 0,
+      "pause_ms_after": 300,
+      "volume_gain_db": -0.5
+    }
+  ]
+}

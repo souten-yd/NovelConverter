@@ -1,0 +1,133 @@
+"""UI page routes (Jinja2 templates)."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import Session
+
+from app.shared.database import get_db
+from app.shared.models import Project, Segment, Speaker, RenderJob, Artifact, VoiceProfile
+
+TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
+
+router = APIRouter(tags=["ui"])
+
+
+@router.get("/", response_class=HTMLResponse)
+def home(request: Request, db: Session = Depends(get_db)):
+    projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    return templates.TemplateResponse(
+        "projects_list.html",
+        {"request": request, "projects": projects},
+    )
+
+
+@router.get("/projects/{project_id}", response_class=HTMLResponse)
+def project_detail(project_id: str, request: Request, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404)
+    seg_count = db.query(Segment).filter(Segment.project_id == project_id).count()
+    sp_count = db.query(Speaker).filter(Speaker.project_id == project_id).count()
+    return templates.TemplateResponse(
+        "project_detail.html",
+        {
+            "request": request,
+            "project": project,
+            "seg_count": seg_count,
+            "sp_count": sp_count,
+        },
+    )
+
+
+@router.get("/projects/{project_id}/segments", response_class=HTMLResponse)
+def segments_page(project_id: str, request: Request, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404)
+    segments = (
+        db.query(Segment)
+        .filter(Segment.project_id == project_id)
+        .order_by(Segment.chapter_index, Segment.order_index)
+        .all()
+    )
+    return templates.TemplateResponse(
+        "segments.html",
+        {"request": request, "project": project, "segments": segments},
+    )
+
+
+@router.get("/projects/{project_id}/voice_mapping", response_class=HTMLResponse)
+def voice_mapping_page(project_id: str, request: Request, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404)
+    speakers = db.query(Speaker).filter(Speaker.project_id == project_id).all()
+    speaker_profiles = []
+    for sp in speakers:
+        vp = sp.voice_profiles[0] if sp.voice_profiles else None
+        speaker_profiles.append({"speaker": sp, "profile": vp})
+    return templates.TemplateResponse(
+        "voice_mapping.html",
+        {
+            "request": request,
+            "project": project,
+            "speaker_profiles": speaker_profiles,
+        },
+    )
+
+
+@router.get("/projects/{project_id}/render", response_class=HTMLResponse)
+def render_page(project_id: str, request: Request, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404)
+    job = (
+        db.query(RenderJob)
+        .filter(RenderJob.project_id == project_id)
+        .order_by(RenderJob.created_at.desc())
+        .first()
+    )
+    artifacts = db.query(Artifact).filter(Artifact.project_id == project_id).all()
+    total = db.query(Segment).filter(Segment.project_id == project_id).count()
+    done = db.query(Segment).filter(
+        Segment.project_id == project_id, Segment.render_status == "done"
+    ).count()
+    failed = db.query(Segment).filter(
+        Segment.project_id == project_id, Segment.render_status == "error"
+    ).count()
+    return templates.TemplateResponse(
+        "render.html",
+        {
+            "request": request,
+            "project": project,
+            "job": job,
+            "artifacts": artifacts,
+            "total_segments": total,
+            "done_segments": done,
+            "failed_segments": failed,
+        },
+    )
+
+
+@router.get("/artifacts/download/{project_id}/{filename}")
+def download_artifact(project_id: str, filename: str, db: Session = Depends(get_db)):
+    artifact_path = Path(__file__).parent.parent.parent.parent / "data" / "outputs" / project_id / filename
+    if not artifact_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(str(artifact_path), filename=filename)
+
+
+@router.get("/segments/audio/{project_id}/{filename}")
+def stream_segment_audio(project_id: str, filename: str):
+    audio_path = (
+        Path(__file__).parent.parent.parent.parent
+        / "data" / "outputs" / project_id / "segments" / filename
+    )
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audio not found")
+    return FileResponse(str(audio_path), media_type="audio/wav")
