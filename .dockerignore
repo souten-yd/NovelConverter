@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environments (use system Python in Docker)
+.venv_orchestrator/
+.venv_tts_base/
+.venv_tts_custom/
+.venv_tts_design/
+.venv/
+venv/
+env/
+
+# Data (mounted as volume in container)
+data/projects/
+data/outputs/
+data/temp/
+data/logs/
+data/novelconverter.db
+
+# Git
+.git/
+.gitignore
+
+# CI
+.github/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs (not needed at runtime)
+docs/
+
+# Local run scripts (not needed in container)
+scripts/
+
+# Tests
+tests/

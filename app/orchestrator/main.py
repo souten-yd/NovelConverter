@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any, Dict
+
+import requests
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -46,3 +49,36 @@ def on_startup():
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "orchestrator"}
+
+
+@app.get("/api/status")
+def full_status() -> Dict[str, Any]:
+    """Aggregate health check for orchestrator + all TTS workers.
+    Used by CI smoke tests and the Docker HEALTHCHECK.
+    """
+    worker_urls = {
+        "tts_base":   os.environ.get("TTS_BASE_URL",   "http://localhost:8001"),
+        "tts_custom": os.environ.get("TTS_CUSTOM_URL", "http://localhost:8002"),
+        "tts_design": os.environ.get("TTS_DESIGN_URL", "http://localhost:8003"),
+    }
+
+    workers: Dict[str, Any] = {}
+    all_ok = True
+
+    for name, url in worker_urls.items():
+        try:
+            r = requests.get(f"{url}/health", timeout=5)
+            if r.status_code == 200:
+                workers[name] = {"status": "ok", **r.json()}
+            else:
+                workers[name] = {"status": "error", "http_status": r.status_code}
+                all_ok = False
+        except Exception as e:
+            workers[name] = {"status": "unreachable", "error": str(e)}
+            all_ok = False
+
+    return {
+        "orchestrator": {"status": "ok"},
+        "workers": workers,
+        "all_healthy": all_ok,
+    }

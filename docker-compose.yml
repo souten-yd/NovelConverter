@@ -1,0 +1,54 @@
+# =============================================================================
+# NovelConverter – docker-compose for local GPU testing
+# Usage:
+#   docker compose up --build
+#   docker compose up --build -e TTS_CUSTOM_USE_REAL=true
+# =============================================================================
+version: "3.9"
+
+services:
+  novelconverter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: novelconverter:local
+    container_name: novelconverter
+    runtime: nvidia          # requires nvidia-container-toolkit
+    environment:
+      # ── TTS mode ──────────────────────────────────────────────────────────
+      TTS_BASE_USE_REAL: "${TTS_BASE_USE_REAL:-false}"
+      TTS_CUSTOM_USE_REAL: "${TTS_CUSTOM_USE_REAL:-false}"
+      TTS_DESIGN_USE_REAL: "${TTS_DESIGN_USE_REAL:-false}"
+      TTS_BASE_MODEL_PATH: "${TTS_BASE_MODEL_PATH:-Qwen/Qwen3-TTS}"
+      TTS_CUSTOM_MODEL_PATH: "${TTS_CUSTOM_MODEL_PATH:-Qwen/Qwen3-TTS}"
+      TTS_DESIGN_MODEL_PATH: "${TTS_DESIGN_MODEL_PATH:-Qwen/Qwen3-TTS}"
+      # ── LLM (optional) ────────────────────────────────────────────────────
+      LLM_API_URL: "${LLM_API_URL:-}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"
+      # ── GPU ───────────────────────────────────────────────────────────────
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    ports:
+      - "8000:8000"   # Orchestrator UI (primary)
+      - "8001:8001"   # TTS Base
+      - "8002:8002"   # TTS Custom
+      - "8003:8003"   # TTS Design
+    volumes:
+      # Persist DB + generated audio outside container
+      - novelconverter_data:/workspace/data
+      # Persist HuggingFace model cache
+      - hf_cache:/workspace/hf_cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  novelconverter_data:
+    driver: local
+  hf_cache:
+    driver: local
