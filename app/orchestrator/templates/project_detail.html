@@ -27,10 +27,10 @@
       <h3>原稿アップロード（txt / zip / rar / epub / 画像）</h3>
       {% if project.raw_text_path %}
         <p class="text-success">✓ アップロード済み</p>
-        <p class="text-small">{{ project.raw_text_path.split('/')[-1] }}</p>
+        <p class="text-small">{{ project.uploaded_filename or project.raw_text_path.split('/')[-1] }}</p>
       {% else %}
         <form id="uploadForm" enctype="multipart/form-data">
-          <input type="file" id="txtFile" accept=".txt,.zip,.rar,.epub,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.tif" class="input">
+          <input type="file" id="txtFile" accept=".txt,.zip,.rar,.epub,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.tif,application/x-rar-compressed,application/vnd.rar" class="input">
           <button type="button" class="btn btn-primary" onclick="uploadText()">アップロード</button>
         </form>
       {% endif %}
@@ -54,7 +54,10 @@
     <div class="step-body">
       <h3>話者分割</h3>
       <p class="text-muted">ルールベース + LLM で話者を推定します</p>
-      <button class="btn btn-primary" onclick="runSegment()" {{ 'disabled' if project.status not in ['preprocessed','segmented','rendering','done'] }}>話者分割実行</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" onclick="runSegment()" {{ 'disabled' if project.status not in ['preprocessed','segmented','rendering','done'] }}>話者分割実行</button>
+        <a href="/projects/{{ project.id }}/diarization_studio" class="btn btn-outline" {{ 'disabled' if project.status not in ['preprocessed','segmented','rendering','done'] }}>分割スタジオで開く →</a>
+      </div>
       <span id="segmentStatus" class="status-inline"></span>
     </div>
   </div>

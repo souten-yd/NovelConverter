@@ -32,6 +32,7 @@ class Project(Base):
     description = Column(Text, default="")
     status = Column(String, default="created")  # created/preprocessing/segmented/rendering/done/error
     raw_text_path = Column(String, nullable=True)
+    uploaded_filename = Column(String, nullable=True)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 

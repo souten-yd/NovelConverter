@@ -18,6 +18,11 @@ templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 router = APIRouter(tags=["ui"])
 
 
+@router.get("/llm", response_class=HTMLResponse)
+def llm_manager_page(request: Request):
+    return templates.TemplateResponse(request, "llm_manager.html", {})
+
+
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)):
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
@@ -34,6 +39,17 @@ def project_detail(project_id: str, request: Request, db: Session = Depends(get_
     return templates.TemplateResponse(
         request, "project_detail.html",
         {"project": project, "seg_count": seg_count, "sp_count": sp_count},
+    )
+
+
+@router.get("/projects/{project_id}/diarization_studio", response_class=HTMLResponse)
+def diarization_studio_page(project_id: str, request: Request, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404)
+    return templates.TemplateResponse(
+        request, "diarization_studio.html",
+        {"project": project},
     )
 
 

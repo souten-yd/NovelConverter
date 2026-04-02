@@ -1,0 +1,467 @@
+{% extends "base.html" %}
+{% block title %}話者分割スタジオ – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="breadcrumb">
+  <a href="/">ホーム</a> / <a href="/projects/{{ project.id }}">{{ project.name }}</a> / 話者分割スタジオ
+</div>
+
+<div class="page-header">
+  <h1>話者分割スタジオ</h1>
+  <span class="badge badge-{{ project.status }}">{{ project.status }}</span>
+</div>
+
+<div class="studio-layout">
+  <!-- ═══════════════════════════ LEFT PANE ═══════════════════════════ -->
+  <div class="studio-left">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <h2 style="margin:0">ルール設定</h2>
+        <button class="btn btn-sm btn-outline" onclick="resetRules()">デフォルトに戻す</button>
+      </div>
+
+      <p class="text-muted" style="font-size:0.82em;margin-bottom:12px">
+        チェックを入れたルールを順番に適用します。ドラッグで順序変更できます。
+      </p>
+
+      <div id="ruleList"></div>
+
+      <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="runPreview()" id="btnPreview">分析実行</button>
+        <button class="btn btn-success" onclick="saveResults()" id="btnSave" disabled>この結果を保存</button>
+      </div>
+      <div id="previewStatus" class="status-inline" style="margin-top:8px"></div>
+    </div>
+
+    <!-- LLM status widget -->
+    <div class="card" style="margin-top:16px">
+      <h3 style="margin:0 0 8px">LLMサーバー状態</h3>
+      <div id="llmStatusBadge" class="status-badge stopped" style="display:inline-block">確認中...</div>
+      <span id="llmModelName" class="text-muted" style="margin-left:8px;font-size:0.85em"></span>
+      <div style="margin-top:8px">
+        <a href="/llm" class="btn btn-outline btn-sm">LLM管理画面を開く</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ RIGHT PANE ══════════════════════════ -->
+  <div class="studio-right">
+    <div class="card" style="height:100%;box-sizing:border-box">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <h2 style="margin:0">プレビュー</h2>
+        <span id="previewSegCount" class="text-muted" style="font-size:0.85em"></span>
+        <!-- filters -->
+        <select id="filterSpeaker" class="input" style="max-width:160px" onchange="applyFilter()">
+          <option value="">全話者</option>
+        </select>
+        <select id="filterConf" class="input" style="max-width:160px" onchange="applyFilter()">
+          <option value="">全信頼度</option>
+          <option value="high">高 (≥0.8)</option>
+          <option value="mid">中 (0.5–0.8)</option>
+          <option value="low">低 (&lt;0.5)</option>
+        </select>
+      </div>
+
+      <!-- Speaker legend -->
+      <div id="speakerLegend" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px"></div>
+
+      <!-- Segment list -->
+      <div id="previewPane" style="max-height:calc(100vh - 320px);overflow-y:auto">
+        <p class="text-muted">「分析実行」ボタンを押すと話者推定結果がここに表示されます。</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.studio-layout {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .studio-layout { grid-template-columns: 1fr; }
+}
+.studio-left { position: sticky; top: 16px; }
+
+/* Rule cards */
+.rule-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: grab;
+  background: #fff;
+  user-select: none;
+}
+.rule-card.dragging { opacity: 0.4; }
+.rule-card.drag-over { border-color: #4299e1; background: #ebf8ff; }
+.rule-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rule-card-header label {
+  flex: 1;
+  font-weight: 600;
+  font-size: 0.88em;
+  cursor: pointer;
+}
+.rule-card-desc { font-size: 0.78em; color: #718096; margin-top: 3px; }
+.rule-params { margin-top: 8px; padding-top: 8px; border-top: 1px solid #f0f0f0; }
+.rule-params .param-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:0.82em; }
+.rule-params .param-row label { min-width:110px; color:#4a5568; }
+.rule-params .param-row input[type=range] { flex:1; }
+.rule-params .param-row .range-val { min-width:36px; text-align:right; }
+
+/* Status badges */
+.status-badge { display:inline-block; padding:3px 10px; border-radius:10px; font-weight:600; font-size:0.82em; }
+.status-badge.stopped  { background:#fed7d7; color:#c53030; }
+.status-badge.loading  { background:#fefcbf; color:#744210; }
+.status-badge.running  { background:#c6f6d5; color:#276749; }
+.status-badge.error    { background:#fed7d7; color:#c53030; }
+
+/* Segment rows */
+.seg-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  font-size: 0.88em;
+}
+.seg-row:hover { background: #f7fafc; }
+.seg-row.hidden { display: none; }
+.seg-badge {
+  flex-shrink: 0;
+  min-width: 88px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.78em;
+  font-weight: 600;
+  text-align: center;
+  color: #fff;
+  white-space: nowrap;
+}
+.seg-text { flex:1; white-space: pre-wrap; word-break: break-all; }
+.seg-meta { flex-shrink:0; font-size:0.75em; color:#a0aec0; min-width:60px; text-align:right; }
+.conf-bar-wrap { width:44px; background:#e2e8f0; border-radius:3px; height:6px; margin-top:5px; }
+.conf-bar { height:6px; border-radius:3px; }
+
+/* Speaker legend */
+.legend-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 10px; border-radius: 12px; font-size: 0.78em; font-weight: 600; color: #fff;
+}
+
+.btn-success { background:#48bb78; color:#fff; border:none; }
+.btn-success:hover { background:#38a169; }
+.btn-success:disabled { background:#9ae6b4; cursor:not-allowed; }
+</style>
+
+<script>
+const projectId = '{{ project.id }}';
+
+// ── Rule state ────────────────────────────────────────────────────────────────
+
+const SPEAKER_COLORS = [
+  '#4299e1','#48bb78','#ed8936','#e53e3e','#9f7aea',
+  '#ed64a6','#ecc94b','#38b2ac','#667eea','#fc8181',
+  '#63b3ed','#68d391','#f6ad55','#fc8181','#b794f4',
+];
+const colorMap = {};
+let colorIdx = 0;
+function getSpeakerColor(name) {
+  if (!colorMap[name]) colorMap[name] = SPEAKER_COLORS[colorIdx++ % SPEAKER_COLORS.length];
+  return colorMap[name];
+}
+
+// Pre-assign stable colors for predictable speakers
+getSpeakerColor('narrator');
+getSpeakerColor('unknown');
+
+let allRules = {};
+let ruleOrder = [];
+let previewData = [];
+
+async function loadRules() {
+  const r = await fetch(`/api/projects/${projectId}/diarization_rules`);
+  if (!r.ok) return;
+  const data = await r.json();
+  allRules = data.rules;
+  ruleOrder = [...data.default_order];
+  renderRuleList();
+}
+
+function getRuleStates() {
+  return ruleOrder.map(id => {
+    const card = document.querySelector(`.rule-card[data-rule-id="${id}"]`);
+    const enabled = card ? card.querySelector('.rule-toggle').checked : true;
+    const params = {};
+    if (card) {
+      card.querySelectorAll('[data-param]').forEach(el => {
+        const key = el.dataset.param;
+        const type = el.dataset.ptype;
+        if (type === 'float') {
+          params[key] = parseFloat(el.value);
+        } else if (type === 'list') {
+          params[key] = el.value.split('\n').map(s => s.trim()).filter(Boolean);
+        } else {
+          params[key] = el.value;
+        }
+      });
+    }
+    return { rule_id: id, enabled, params };
+  });
+}
+
+function resetRules() {
+  ruleOrder = Object.keys(allRules);
+  renderRuleList();
+  clearPreview();
+}
+
+function renderRuleList() {
+  const el = document.getElementById('ruleList');
+  el.innerHTML = ruleOrder.map(id => {
+    const rule = allRules[id];
+    if (!rule) return '';
+    const paramsHtml = buildParamsHtml(id, rule.params || {});
+    return `
+      <div class="rule-card" data-rule-id="${id}" draggable="true">
+        <div class="rule-card-header">
+          <span class="drag-handle" style="cursor:grab;color:#cbd5e0;font-size:1.1em">⠿</span>
+          <input type="checkbox" class="rule-toggle" checked id="toggle-${id}">
+          <label for="toggle-${id}">${rule.label}</label>
+        </div>
+        <div class="rule-card-desc">${rule.description}</div>
+        ${paramsHtml ? `<div class="rule-params">${paramsHtml}</div>` : ''}
+      </div>`;
+  }).join('');
+
+  setupDragDrop();
+}
+
+function buildParamsHtml(ruleId, paramDefs) {
+  const html = [];
+  for (const [key, def] of Object.entries(paramDefs)) {
+    if (def.type === 'float') {
+      html.push(`
+        <div class="param-row">
+          <label>${key}</label>
+          <input type="range" data-param="${key}" data-ptype="float"
+            min="${def.min ?? 0}" max="${def.max ?? 1}" step="${def.step ?? 0.05}"
+            value="${def.default}" oninput="this.nextElementSibling.textContent=parseFloat(this.value).toFixed(2)">
+          <span class="range-val">${parseFloat(def.default).toFixed(2)}</span>
+        </div>`);
+    } else if (def.type === 'list') {
+      const val = (def.default || []).join('\n');
+      html.push(`
+        <div class="param-row" style="align-items:flex-start">
+          <label>${key}</label>
+          <textarea data-param="${key}" data-ptype="list" rows="4"
+            class="input" style="flex:1;font-size:0.8em">${val}</textarea>
+        </div>`);
+    }
+  }
+  return html.join('');
+}
+
+// ── Drag & Drop rule reordering ───────────────────────────────────────────────
+
+function setupDragDrop() {
+  const cards = document.querySelectorAll('.rule-card');
+  let dragSrc = null;
+
+  cards.forEach(card => {
+    card.addEventListener('dragstart', e => {
+      dragSrc = card;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    card.addEventListener('dragend', () => card.classList.remove('dragging'));
+    card.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      card.classList.add('drag-over');
+    });
+    card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
+    card.addEventListener('drop', e => {
+      e.preventDefault();
+      card.classList.remove('drag-over');
+      if (dragSrc && dragSrc !== card) {
+        const srcId = dragSrc.dataset.ruleId;
+        const dstId = card.dataset.ruleId;
+        const si = ruleOrder.indexOf(srcId);
+        const di = ruleOrder.indexOf(dstId);
+        ruleOrder.splice(si, 1);
+        ruleOrder.splice(di, 0, srcId);
+        renderRuleList();
+      }
+    });
+  });
+}
+
+// ── Preview ───────────────────────────────────────────────────────────────────
+
+async function runPreview() {
+  const btn = document.getElementById('btnPreview');
+  const status = document.getElementById('previewStatus');
+  btn.disabled = true;
+  status.textContent = '分析中...';
+  status.style.color = '';
+
+  const rules = getRuleStates();
+
+  try {
+    const r = await fetch(`/api/projects/${projectId}/preview_diarization`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rules }),
+    });
+    if (!r.ok) {
+      const e = await r.json();
+      status.textContent = '失敗: ' + (e.detail || JSON.stringify(e));
+      status.style.color = 'red';
+      return;
+    }
+    previewData = await r.json();
+    renderPreview(previewData);
+    status.textContent = `完了: ${previewData.length} セグメント`;
+    document.getElementById('btnSave').disabled = false;
+  } catch(err) {
+    status.textContent = 'エラー: ' + err.message;
+    status.style.color = 'red';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderPreview(data) {
+  const pane = document.getElementById('previewPane');
+  const filterSel = document.getElementById('filterSpeaker');
+
+  // Rebuild speaker color map and legend
+  const speakerSet = [...new Set(data.map(s => s.predicted_speaker))];
+  const legend = document.getElementById('speakerLegend');
+  legend.innerHTML = speakerSet.map(sp => {
+    const color = getSpeakerColor(sp);
+    return `<span class="legend-chip" style="background:${color}">${sp}</span>`;
+  }).join('');
+
+  // Rebuild filter options
+  const currentFilter = filterSel.value;
+  filterSel.innerHTML = '<option value="">全話者</option>' +
+    speakerSet.map(sp => `<option value="${sp}" ${sp === currentFilter ? 'selected' : ''}>${sp}</option>`).join('');
+
+  // Render segments
+  pane.innerHTML = data.map(seg => {
+    const color = getSpeakerColor(seg.predicted_speaker);
+    const confPct = Math.round(seg.confidence * 100);
+    const confColor = seg.confidence >= 0.8 ? '#48bb78' : seg.confidence >= 0.5 ? '#ed8936' : '#e53e3e';
+    const typeTag = { dialogue: '台詞', thought: '心内', narration: '地の文', unknown: '不明' }[seg.segment_type] || seg.segment_type;
+    return `<div class="seg-row" data-speaker="${seg.predicted_speaker}" data-conf="${seg.confidence}">
+      <div>
+        <div class="seg-badge" style="background:${color}">${seg.predicted_speaker}</div>
+        <div style="font-size:0.72em;color:#718096;text-align:center;margin-top:2px">${typeTag}</div>
+        <div class="conf-bar-wrap" title="${confPct}%">
+          <div class="conf-bar" style="width:${confPct}%;background:${confColor}"></div>
+        </div>
+      </div>
+      <span class="seg-text">${escHtml(seg.raw_text)}</span>
+      <span class="seg-meta">${confPct}%<br><span style="font-size:0.85em;color:#cbd5e0">#${seg.order_index}</span></span>
+    </div>`;
+  }).join('');
+
+  document.getElementById('previewSegCount').textContent = `${data.length} セグメント`;
+  applyFilter();
+}
+
+function applyFilter() {
+  const spFilter = document.getElementById('filterSpeaker').value;
+  const confFilter = document.getElementById('filterConf').value;
+  document.querySelectorAll('#previewPane .seg-row').forEach(row => {
+    const sp = row.dataset.speaker;
+    const conf = parseFloat(row.dataset.conf);
+    const spMatch = !spFilter || sp === spFilter;
+    let confMatch = true;
+    if (confFilter === 'high') confMatch = conf >= 0.8;
+    else if (confFilter === 'mid') confMatch = conf >= 0.5 && conf < 0.8;
+    else if (confFilter === 'low') confMatch = conf < 0.5;
+    row.classList.toggle('hidden', !(spMatch && confMatch));
+  });
+}
+
+function clearPreview() {
+  previewData = [];
+  document.getElementById('previewPane').innerHTML =
+    '<p class="text-muted">「分析実行」ボタンを押すと話者推定結果がここに表示されます。</p>';
+  document.getElementById('speakerLegend').innerHTML = '';
+  document.getElementById('previewSegCount').textContent = '';
+  document.getElementById('btnSave').disabled = true;
+  document.getElementById('previewStatus').textContent = '';
+}
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+
+async function saveResults() {
+  if (!previewData.length) return;
+  if (!confirm('この話者分割結果をプロジェクトに保存しますか？\n（既存の分割結果は上書きされます）')) return;
+
+  const rules = getRuleStates();
+  const status = document.getElementById('previewStatus');
+  status.textContent = '保存中...';
+  document.getElementById('btnSave').disabled = true;
+
+  const r = await fetch(`/api/projects/${projectId}/segment_speakers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rules }),
+  });
+  if (r.ok) {
+    const d = await r.json();
+    status.textContent = `保存完了: ${d.speaker_count} 話者`;
+    status.style.color = 'green';
+    setTimeout(() => { window.location.href = `/projects/${projectId}`; }, 1200);
+  } else {
+    const e = await r.json();
+    status.textContent = '保存失敗: ' + (e.detail || JSON.stringify(e));
+    status.style.color = 'red';
+    document.getElementById('btnSave').disabled = false;
+  }
+}
+
+// ── LLM status widget ─────────────────────────────────────────────────────────
+
+async function refreshLlmStatus() {
+  try {
+    const r = await fetch('/api/llm/status');
+    if (!r.ok) return;
+    const s = await r.json();
+    const badge = document.getElementById('llmStatusBadge');
+    badge.className = 'status-badge ' + s.status;
+    const labels = { stopped:'停止中', loading:'読み込み中', running:'稼働中', error:'エラー' };
+    badge.textContent = labels[s.status] || s.status;
+    document.getElementById('llmModelName').textContent = s.status === 'running' ? s.model_filename : '';
+  } catch(_) {}
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+loadRules();
+refreshLlmStatus();
+setInterval(refreshLlmStatus, 8000);
+
+// Also need to patch segment_speakers endpoint to accept optional rules body.
+// The save path calls /segment_speakers with a rules body – handled in processing.py.
+</script>
+{% endblock %}

@@ -1,0 +1,302 @@
+{% extends "base.html" %}
+{% block title %}LLM管理 – NovelConverter{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/">ホーム</a> / LLM管理</div>
+
+<div class="page-header">
+  <h1>LLM管理</h1>
+  <p class="text-muted">llama.cpp-cuda サーバーの管理・GGUFモデルのダウンロード</p>
+</div>
+
+<!-- ── Server status ───────────────────────────────────── -->
+<div class="card" id="serverCard">
+  <h2>サーバー状態</h2>
+  <div id="statusBadge" class="status-badge stopped">停止中</div>
+  <div id="statusDetail" class="text-muted" style="margin-top:4px;font-size:0.85em"></div>
+  <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+    <button id="btnUnload" class="btn btn-danger" onclick="unloadModel()" disabled>アンロード</button>
+  </div>
+</div>
+
+<!-- ── Local models ───────────────────────────────────── -->
+<div class="card" style="margin-top:20px">
+  <h2>ローカルモデル一覧</h2>
+  <div id="localModelsList">
+    <p class="text-muted">読み込み中...</p>
+  </div>
+</div>
+
+<!-- ── Load config ────────────────────────────────────── -->
+<div class="card" style="margin-top:20px" id="loadConfigCard">
+  <h2>ロード設定</h2>
+  <div class="form-row">
+    <label>GPUレイヤー数 <span class="text-muted">(-1=全て)</span></label>
+    <input type="number" id="nGpuLayers" value="-1" min="-1" max="1000" class="input" style="width:100px">
+  </div>
+  <div class="form-row" style="margin-top:8px">
+    <label>コンテキストサイズ</label>
+    <input type="number" id="ctxSize" value="4096" min="512" max="131072" step="512" class="input" style="width:120px">
+  </div>
+</div>
+
+<!-- ── HuggingFace search ─────────────────────────────── -->
+<div class="card" style="margin-top:20px">
+  <h2>HuggingFace 検索</h2>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <input type="text" id="searchQuery" class="input" placeholder="例: llama gguf q4" style="flex:1;min-width:200px" onkeydown="if(event.key==='Enter')searchModels()">
+    <button class="btn btn-primary" onclick="searchModels()">検索</button>
+  </div>
+  <div id="searchResults" style="margin-top:16px"></div>
+</div>
+
+<!-- ── Download queue ─────────────────────────────────── -->
+<div class="card" style="margin-top:20px" id="downloadQueueCard" style="display:none">
+  <h2>ダウンロードキュー</h2>
+  <div id="downloadQueue"></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<style>
+.status-badge { display:inline-block; padding:4px 12px; border-radius:12px; font-weight:600; font-size:0.9em; }
+.status-badge.stopped  { background:#fed7d7; color:#c53030; }
+.status-badge.loading  { background:#fefcbf; color:#744210; }
+.status-badge.running  { background:#c6f6d5; color:#276749; }
+.status-badge.error    { background:#fed7d7; color:#c53030; }
+.model-row { display:flex; align-items:center; gap:10px; padding:10px; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:8px; flex-wrap:wrap; }
+.model-row .model-name { flex:1; font-weight:500; word-break:break-all; }
+.model-row .model-size { color:#718096; font-size:0.85em; white-space:nowrap; }
+.search-result-card { border:1px solid #e2e8f0; border-radius:8px; padding:12px; margin-bottom:12px; }
+.search-result-card h4 { margin:0 0 4px; font-size:0.95em; color:#2d3748; word-break:break-all; }
+.search-result-card .meta { font-size:0.8em; color:#718096; margin-bottom:8px; }
+.file-select-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.dl-item { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #f0f0f0; }
+.dl-item .dl-name { flex:1; font-size:0.85em; word-break:break-all; }
+.dl-badge { padding:2px 8px; border-radius:10px; font-size:0.78em; }
+.dl-badge.downloading { background:#bee3f8; color:#2a69ac; }
+.dl-badge.done { background:#c6f6d5; color:#276749; }
+.dl-badge.error { background:#fed7d7; color:#c53030; }
+.form-row { display:flex; align-items:center; gap:10px; }
+.form-row label { min-width:160px; font-size:0.9em; }
+</style>
+<script>
+const downloadTasks = {};  // taskKey → { status, name }
+
+async function refreshStatus() {
+  const r = await fetch('/api/llm/status');
+  if (!r.ok) return;
+  const s = await r.json();
+  const badge = document.getElementById('statusBadge');
+  badge.className = 'status-badge ' + s.status;
+  const labels = { stopped:'停止中', loading:'読み込み中...', running:'稼働中', error:'エラー' };
+  badge.textContent = labels[s.status] || s.status;
+
+  const detail = document.getElementById('statusDetail');
+  if (s.status === 'running') {
+    detail.textContent = `モデル: ${s.model_filename}  ポート: ${s.port}  PID: ${s.pid}`;
+  } else if (s.status === 'error') {
+    detail.textContent = s.error;
+    detail.style.color = '#c53030';
+  } else {
+    detail.textContent = '';
+    detail.style.color = '';
+  }
+
+  const btnUnload = document.getElementById('btnUnload');
+  btnUnload.disabled = s.status !== 'running';
+}
+
+async function refreshLocalModels() {
+  const r = await fetch('/api/llm/models');
+  if (!r.ok) return;
+  const models = await r.json();
+  const el = document.getElementById('localModelsList');
+
+  if (models.length === 0) {
+    el.innerHTML = '<p class="text-muted">ローカルモデルがありません。HuggingFaceから検索・ダウンロードしてください。</p>';
+    return;
+  }
+
+  const statusR = await fetch('/api/llm/status');
+  const statusData = statusR.ok ? await statusR.json() : {};
+
+  el.innerHTML = models.map(m => `
+    <div class="model-row">
+      <span class="model-name">${m.filename} ${m.loaded ? '<span class="dl-badge done">ロード済み</span>' : ''}</span>
+      <span class="model-size">${m.size_mb} MB</span>
+      <button class="btn btn-primary btn-sm" onclick="loadModel('${m.filename}')"
+        ${statusData.status === 'running' ? 'disabled' : ''}>ロード</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteModel('${m.filename}')"
+        ${m.loaded ? 'disabled' : ''}>削除</button>
+    </div>
+  `).join('');
+}
+
+async function loadModel(filename) {
+  const nGpu = parseInt(document.getElementById('nGpuLayers').value) || -1;
+  const ctx = parseInt(document.getElementById('ctxSize').value) || 4096;
+
+  const badge = document.getElementById('statusBadge');
+  badge.className = 'status-badge loading';
+  badge.textContent = '読み込み中...';
+  document.getElementById('statusDetail').textContent = `${filename} を起動中...`;
+
+  const r = await fetch('/api/llm/load', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ model_filename: filename, n_gpu_layers: nGpu, ctx_size: ctx }),
+  });
+  const data = await r.json();
+  if (!r.ok) {
+    alert('ロード失敗: ' + (data.detail || JSON.stringify(data)));
+  }
+  await refreshStatus();
+  await refreshLocalModels();
+}
+
+async function unloadModel() {
+  if (!confirm('モデルをアンロードしますか？')) return;
+  await fetch('/api/llm/unload', { method: 'POST' });
+  await refreshStatus();
+  await refreshLocalModels();
+}
+
+async function deleteModel(filename) {
+  if (!confirm(`${filename} を削除しますか？`)) return;
+  const r = await fetch(`/api/llm/models/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+  if (!r.ok) {
+    const e = await r.json();
+    alert('削除失敗: ' + (e.detail || JSON.stringify(e)));
+  } else {
+    await refreshLocalModels();
+  }
+}
+
+async function searchModels() {
+  const q = document.getElementById('searchQuery').value.trim();
+  if (!q) return;
+
+  const el = document.getElementById('searchResults');
+  el.innerHTML = '<p class="text-muted">検索中...</p>';
+
+  const r = await fetch('/api/llm/search', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ query: q }),
+  });
+  if (!r.ok) { el.innerHTML = '<p style="color:red">検索に失敗しました</p>'; return; }
+  const results = await r.json();
+
+  if (results.length === 0) {
+    el.innerHTML = '<p class="text-muted">結果なし</p>';
+    return;
+  }
+
+  el.innerHTML = results.map(m => `
+    <div class="search-result-card" id="card-${btoa(m.repo_id).replace(/[^a-zA-Z0-9]/g,'')}">
+      <h4>${m.repo_id}</h4>
+      <div class="meta">
+        ダウンロード: ${m.downloads.toLocaleString()}  ❤️ ${m.likes}
+        ${m.pipeline_tag ? ` &nbsp;|&nbsp; ${m.pipeline_tag}` : ''}
+      </div>
+      <div class="file-select-row">
+        <select id="filesel-${btoa(m.repo_id).replace(/[^a-zA-Z0-9]/g,'')}" class="input" style="flex:1" onchange="" disabled>
+          <option>ファイル一覧を取得中...</option>
+        </select>
+        <button class="btn btn-outline btn-sm" onclick="fetchFiles('${m.repo_id}')">ファイル一覧</button>
+        <button class="btn btn-primary btn-sm" onclick="startDownload('${m.repo_id}')">ダウンロード</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function fetchFiles(repoId) {
+  const safeId = btoa(repoId).replace(/[^a-zA-Z0-9]/g,'');
+  const sel = document.getElementById('filesel-' + safeId);
+  sel.disabled = true;
+  sel.innerHTML = '<option>取得中...</option>';
+
+  const r = await fetch('/api/llm/files', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ repo_id: repoId }),
+  });
+  if (!r.ok) { sel.innerHTML = '<option>取得失敗</option>'; return; }
+  const files = await r.json();
+
+  if (files.length === 0) {
+    sel.innerHTML = '<option>GGUFファイルなし</option>';
+    return;
+  }
+  sel.innerHTML = files.map(f => {
+    const sizeStr = f.size ? ` (${(f.size/(1024*1024)).toFixed(0)} MB)` : '';
+    return `<option value="${f.filename}">${f.filename}${sizeStr}</option>`;
+  }).join('');
+  sel.disabled = false;
+}
+
+async function startDownload(repoId) {
+  const safeId = btoa(repoId).replace(/[^a-zA-Z0-9]/g,'');
+  const sel = document.getElementById('filesel-' + safeId);
+  const filename = sel.value;
+  if (!filename || sel.disabled) {
+    alert('先にファイル一覧を取得し、ファイルを選択してください');
+    return;
+  }
+
+  const r = await fetch('/api/llm/download', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ repo_id: repoId, filename: filename }),
+  });
+  const data = await r.json();
+  if (!r.ok) { alert('ダウンロード開始失敗: ' + (data.detail || JSON.stringify(data))); return; }
+
+  const taskKey = data.task_key;
+  downloadTasks[taskKey] = { status: 'downloading', name: filename };
+  renderDownloadQueue();
+
+  // poll status
+  const interval = setInterval(async () => {
+    const sr = await fetch(`/api/llm/download/status?task_key=${encodeURIComponent(taskKey)}`);
+    if (!sr.ok) return;
+    const sd = await sr.json();
+    downloadTasks[taskKey] = { ...sd, name: filename };
+    renderDownloadQueue();
+    if (sd.status === 'done') {
+      clearInterval(interval);
+      await refreshLocalModels();
+    } else if (sd.status === 'error') {
+      clearInterval(interval);
+    }
+  }, 2000);
+}
+
+function renderDownloadQueue() {
+  const card = document.getElementById('downloadQueueCard');
+  const el = document.getElementById('downloadQueue');
+  const keys = Object.keys(downloadTasks);
+  if (keys.length === 0) { card.style.display = 'none'; return; }
+  card.style.display = '';
+
+  el.innerHTML = keys.map(k => {
+    const t = downloadTasks[k];
+    const badgeClass = t.status === 'done' ? 'done' : t.status === 'error' ? 'error' : 'downloading';
+    const badgeLabel = t.status === 'done' ? '完了' : t.status === 'error' ? 'エラー' : 'ダウンロード中...';
+    const extra = t.status === 'error' ? `<span style="color:red;font-size:0.8em">${t.error || ''}</span>` : '';
+    return `<div class="dl-item">
+      <span class="dl-name">${t.name || k}</span>
+      <span class="dl-badge ${badgeClass}">${badgeLabel}</span>
+      ${extra}
+    </div>`;
+  }).join('');
+}
+
+// Initial load
+refreshStatus();
+refreshLocalModels();
+// Poll server status every 5 seconds
+setInterval(refreshStatus, 5000);
+</script>
+{% endblock %}
