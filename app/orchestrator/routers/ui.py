@@ -21,10 +21,7 @@ router = APIRouter(tags=["ui"])
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)):
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
-    return templates.TemplateResponse(
-        "projects_list.html",
-        {"request": request, "projects": projects},
-    )
+    return templates.TemplateResponse(request, "projects_list.html", {"projects": projects})
 
 
 @router.get("/projects/{project_id}", response_class=HTMLResponse)
@@ -35,13 +32,8 @@ def project_detail(project_id: str, request: Request, db: Session = Depends(get_
     seg_count = db.query(Segment).filter(Segment.project_id == project_id).count()
     sp_count = db.query(Speaker).filter(Speaker.project_id == project_id).count()
     return templates.TemplateResponse(
-        "project_detail.html",
-        {
-            "request": request,
-            "project": project,
-            "seg_count": seg_count,
-            "sp_count": sp_count,
-        },
+        request, "project_detail.html",
+        {"project": project, "seg_count": seg_count, "sp_count": sp_count},
     )
 
 
@@ -57,8 +49,8 @@ def segments_page(project_id: str, request: Request, db: Session = Depends(get_d
         .all()
     )
     return templates.TemplateResponse(
-        "segments.html",
-        {"request": request, "project": project, "segments": segments},
+        request, "segments.html",
+        {"project": project, "segments": segments},
     )
 
 
@@ -73,12 +65,8 @@ def voice_mapping_page(project_id: str, request: Request, db: Session = Depends(
         vp = sp.voice_profiles[0] if sp.voice_profiles else None
         speaker_profiles.append({"speaker": sp, "profile": vp})
     return templates.TemplateResponse(
-        "voice_mapping.html",
-        {
-            "request": request,
-            "project": project,
-            "speaker_profiles": speaker_profiles,
-        },
+        request, "voice_mapping.html",
+        {"project": project, "speaker_profiles": speaker_profiles},
     )
 
 
@@ -102,9 +90,8 @@ def render_page(project_id: str, request: Request, db: Session = Depends(get_db)
         Segment.project_id == project_id, Segment.render_status == "error"
     ).count()
     return templates.TemplateResponse(
-        "render.html",
+        request, "render.html",
         {
-            "request": request,
             "project": project,
             "job": job,
             "artifacts": artifacts,
