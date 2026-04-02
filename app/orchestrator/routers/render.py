@@ -14,15 +14,20 @@ from app.shared.database import SessionLocal, get_db
 from app.shared.models import Project, Segment, Speaker, VoiceProfile, RenderJob, Artifact
 from app.shared.schemas import RenderJobOut, ArtifactOut
 from app.shared.logger import get_logger
+from app.shared.paths import get_data_dir
 from app.orchestrator.services.tts_dispatcher import synthesize
 from app.orchestrator.services.audio_merger import merge_wavs, try_convert_to_m4b, get_wav_duration
 
 logger = get_logger("router.render")
 router = APIRouter(prefix="/api/projects", tags=["render"])
 
-DATA_DIR = Path(__file__).parent.parent.parent.parent / "data"
-OUTPUT_DIR = DATA_DIR / "outputs"
-TEMP_DIR = DATA_DIR / "temp"
+
+def _output_dir() -> Path:
+    return get_data_dir() / "outputs"
+
+
+def _temp_dir() -> Path:
+    return get_data_dir() / "temp"
 
 
 def _get_project_or_404(project_id: str, db: Session) -> Project:
@@ -57,7 +62,7 @@ def _render_background(project_id: str, job_id: str, skip_done: bool = True):
             if sp.voice_profiles:
                 sp_name_to_profile[sp.name] = sp.voice_profiles[0]
 
-        output_dir = OUTPUT_DIR / project_id / "segments"
+        output_dir = _output_dir() / project_id / "segments"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         job.total_segments = len(segments)
@@ -184,7 +189,7 @@ def merge_audio(project_id: str, db: Session = Depends(get_db)):
         if sp.voice_profiles:
             sp_profile_map[sp.name] = sp.voice_profiles[0]
 
-    out_dir = OUTPUT_DIR / project_id
+    out_dir = _output_dir() / project_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     artifacts_created = []

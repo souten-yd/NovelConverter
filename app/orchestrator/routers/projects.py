@@ -11,12 +11,15 @@ from app.shared.database import get_db
 from app.shared.models import Project
 from app.shared.schemas import ProjectCreate, ProjectOut
 from app.shared.logger import get_logger
+from app.shared.paths import get_data_dir
 from app.orchestrator.services.ingest import load_text_file, save_project_text
 
 logger = get_logger("router.projects")
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
-DATA_DIR = Path(__file__).parent.parent.parent.parent / "data" / "projects"
+
+def _projects_dir() -> Path:
+    return get_data_dir() / "projects"
 
 
 def _get_project_or_404(project_id: str, db: Session) -> Project:
@@ -66,7 +69,7 @@ def upload_text(
     finally:
         os.unlink(tmp_path)
 
-    project_dir = DATA_DIR / project_id
+    project_dir = _projects_dir() / project_id
     dest = save_project_text(project_dir, text, filename=file.filename or "upload.txt")
 
     project.raw_text_path = str(dest)

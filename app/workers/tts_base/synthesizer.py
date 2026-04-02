@@ -17,7 +17,7 @@ from app.shared.logger import get_logger
 
 logger = get_logger("synth.base")
 
-TEMP_DIR = Path(__file__).parent.parent.parent.parent / "data" / "temp"
+TEMP_DIR = Path(os.environ.get("DATA_DIR", str(Path(__file__).parent.parent.parent.parent / "data"))) / "temp"
 
 
 # ── Mock ──────────────────────────────────────────────────────────────────────

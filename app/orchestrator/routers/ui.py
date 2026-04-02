@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.shared.database import get_db
 from app.shared.models import Project, Segment, Speaker, RenderJob, Artifact, VoiceProfile
+from app.shared.paths import get_data_dir
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
@@ -116,7 +117,7 @@ def render_page(project_id: str, request: Request, db: Session = Depends(get_db)
 
 @router.get("/artifacts/download/{project_id}/{filename}")
 def download_artifact(project_id: str, filename: str, db: Session = Depends(get_db)):
-    artifact_path = Path(__file__).parent.parent.parent.parent / "data" / "outputs" / project_id / filename
+    artifact_path = get_data_dir() / "outputs" / project_id / filename
     if not artifact_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(str(artifact_path), filename=filename)
@@ -124,10 +125,7 @@ def download_artifact(project_id: str, filename: str, db: Session = Depends(get_
 
 @router.get("/segments/audio/{project_id}/{filename}")
 def stream_segment_audio(project_id: str, filename: str):
-    audio_path = (
-        Path(__file__).parent.parent.parent.parent
-        / "data" / "outputs" / project_id / "segments" / filename
-    )
+    audio_path = get_data_dir() / "outputs" / project_id / "segments" / filename
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail="Audio not found")
     return FileResponse(str(audio_path), media_type="audio/wav")

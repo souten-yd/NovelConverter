@@ -6,8 +6,13 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 
-_DEFAULT_DB = Path(__file__).parent.parent.parent / "data" / "novelconverter.db"
-DB_URL = os.environ.get("DATABASE_URL", f"sqlite:///{_DEFAULT_DB}")
+def _default_db_url() -> str:
+    data_dir = os.environ.get("DATA_DIR", str(Path(__file__).parent.parent.parent / "data"))
+    db_path = Path(data_dir) / "novelconverter.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{db_path}"
+
+DB_URL = os.environ.get("DATABASE_URL", "") or _default_db_url()
 
 engine = create_engine(
     DB_URL,
