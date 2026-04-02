@@ -24,13 +24,13 @@
   <div class="step-card {{ 'step-done' if project.raw_text_path else 'step-current' }}">
     <div class="step-num">1</div>
     <div class="step-body">
-      <h3>テキストアップロード</h3>
+      <h3>原稿アップロード（txt / zip / rar / epub / 画像）</h3>
       {% if project.raw_text_path %}
         <p class="text-success">✓ アップロード済み</p>
         <p class="text-small">{{ project.raw_text_path.split('/')[-1] }}</p>
       {% else %}
         <form id="uploadForm" enctype="multipart/form-data">
-          <input type="file" id="txtFile" accept=".txt" class="input">
+          <input type="file" id="txtFile" accept=".txt,.zip,.rar,.epub,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.tif" class="input">
           <button type="button" class="btn btn-primary" onclick="uploadText()">アップロード</button>
         </form>
       {% endif %}
@@ -99,7 +99,7 @@ async function uploadText() {
   fd.append('file', file);
   const res = await fetch(`/api/projects/${projectId}/upload_text`, { method: 'POST', body: fd });
   if (res.ok) { location.reload(); }
-  else { const e = await res.json(); alert('アップロード失敗: ' + JSON.stringify(e.detail)); }
+  else { const e = await res.json(); const detail = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail); alert('アップロード失敗: ' + detail); }
 }
 
 async function runPreprocess() {
