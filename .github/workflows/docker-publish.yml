@@ -1,5 +1,5 @@
 # =============================================================================
-# NovelConverter – Docker Build & Publish to GHCR
+# NovelConverter – Docker Build & Publish to Docker Hub
 #
 # Triggers:
 #   - Push to main / master
@@ -7,17 +7,18 @@
 #   - Manual dispatch (workflow_dispatch)
 #
 # Published images:
-#   ghcr.io/<owner>/novelconverter:latest
-#   ghcr.io/<owner>/novelconverter:<tag>
-#   ghcr.io/<owner>/novelconverter:<sha>
+#   docker.io/<DOCKERHUB_USERNAME>/novelconverter:latest
+#   docker.io/<DOCKERHUB_USERNAME>/novelconverter:<tag>
+#   docker.io/<DOCKERHUB_USERNAME>/novelconverter:sha-<sha>
 #
 # Required secrets (Settings → Secrets → Actions):
-#   GHCR_TOKEN  – GitHub Personal Access Token with write:packages scope
-#                 (or use the built-in GITHUB_TOKEN for same-repo pushes)
+#   DOCKERHUB_USERNAME  – Docker Hub ユーザー名
+#   DOCKERHUB_TOKEN     – Docker Hub Access Token
+#                         (hub.docker.com → Account Settings → Security → Access Tokens)
 #
 # Optional secrets for RunPod status check:
 #   RUNPOD_API_KEY  – RunPod API key
-#   RUNPOD_POD_ID   – Pod ID to restart/check after new image is pushed
+#   RUNPOD_POD_ID   – 状態チェック対象の Pod ID
 # =============================================================================
 
 name: Docker Publish
@@ -37,32 +38,24 @@ on:
         default: "true"
         type: choice
         options: ["true", "false"]
-      tts_real:
-        description: "Include real TTS deps (heavy)"
-        required: false
-        default: "false"
-        type: choice
-        options: ["true", "false"]
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/novelconverter
+  REGISTRY: docker.io
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/novelconverter
 
 jobs:
   # ===========================================================================
-  # Job 1 – Build & push Docker image
+  # Job 1 – Build & push Docker image to Docker Hub
   # ===========================================================================
   build-and-push:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
 
     outputs:
-      image_tag: ${{ steps.meta.outputs.tags }}
-      image_digest: ${{ steps.build.outputs.digest }}
       short_sha: ${{ steps.vars.outputs.short_sha }}
+      image_digest: ${{ steps.build.outputs.digest }}
 
     steps:
       - name: Checkout repository
@@ -72,23 +65,18 @@ jobs:
         id: vars
         run: echo "short_sha=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
 
-      # ── QEMU for multi-platform (linux/amd64 only for GPU) ─────────────────
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          driver-opts: |
-            image=moby/buildkit:latest
+          driver-opts: image=moby/buildkit:latest
 
-      # ── Login to GHCR ──────────────────────────────────────────────────────
-      - name: Log in to GitHub Container Registry
+      # ── Login to Docker Hub ────────────────────────────────────────────────
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # ── Docker metadata (tags + labels) ───────────────────────────────────
       - name: Extract Docker metadata
@@ -97,34 +85,28 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # latest on default branch
             type=raw,value=latest,enable={{is_default_branch}}
-            # semantic version tags  (v1.2.3 → 1.2.3, 1.2, 1)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            # short SHA always
             type=sha,prefix=sha-,format=short
-            # branch name
             type=ref,event=branch
           labels: |
             org.opencontainers.image.title=NovelConverter
             org.opencontainers.image.description=Local audiobook generator from novel text using Qwen3-TTS
-            org.opencontainers.image.vendor=${{ github.repository_owner }}
+            org.opencontainers.image.vendor=${{ secrets.DOCKERHUB_USERNAME }}
 
-      # ── Build (and optionally push) ────────────────────────────────────────
+      # ── Build & push (linux/amd64 only – GPU image) ───────────────────────
       - name: Build and push Docker image
         id: build
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          # GPU images are linux/amd64 only
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' && (github.event.inputs.push_image != 'false') }}
+          push: ${{ github.event_name != 'pull_request' && github.event.inputs.push_image != 'false' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # ── Build cache (speed up subsequent runs) ─────────────────────────
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
@@ -137,7 +119,7 @@ jobs:
           echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Registry | \`${{ env.REGISTRY }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Image | \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ env.IMAGE_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SHA | \`${{ steps.vars.outputs.short_sha }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Digest | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -147,25 +129,25 @@ jobs:
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
   # ===========================================================================
-  # Job 2 – Smoke test: pull image and verify /health endpoint
+  # Job 2 – Smoke test: pull & run container, check all health endpoints
   # ===========================================================================
   smoke-test:
-    name: Smoke Test (Mock TTS)
+    name: Smoke Test (Mock TTS, no GPU)
     runs-on: ubuntu-latest
     needs: build-and-push
     if: ${{ github.event_name != 'pull_request' }}
 
     steps:
-      - name: Log in to GitHub Container Registry
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Pull image
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ needs.build-and-push.outputs.short_sha }}"
+          IMAGE="${{ env.IMAGE_NAME }}:sha-${{ needs.build-and-push.outputs.short_sha }}"
           echo "Pulling $IMAGE"
           docker pull "$IMAGE"
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
@@ -179,9 +161,9 @@ jobs:
             -e TTS_CUSTOM_USE_REAL=false \
             -e TTS_DESIGN_USE_REAL=false \
             "$IMAGE"
-          echo "Container started"
+          echo "Container started (ID: $(docker inspect -f '{{.Id}}' nc_smoke | head -c 12))"
 
-      - name: Wait for services to be ready
+      - name: Wait for Orchestrator to be ready
         timeout-minutes: 3
         run: |
           echo "Waiting for Orchestrator (port 8000)..."
@@ -190,16 +172,28 @@ jobs:
               echo "✓ Orchestrator ready (attempt $i)"
               break
             fi
-            echo "  attempt $i/36 – not ready yet, sleeping 5s"
+            if [ "$i" -eq 36 ]; then
+              echo "ERROR: Orchestrator did not start in time"
+              docker logs nc_smoke | tail -50
+              exit 1
+            fi
+            echo "  attempt $i/36 – waiting 5s..."
             sleep 5
           done
 
-          echo "Waiting for TTS Workers..."
+      - name: Wait for all TTS workers to be ready
+        timeout-minutes: 2
+        run: |
           for port in 8001 8002 8003; do
-            for i in $(seq 1 18); do
+            echo "Waiting for TTS Worker :${port}..."
+            for i in $(seq 1 24); do
               if curl -sf http://localhost:${port}/health > /dev/null 2>&1; then
-                echo "✓ Worker :${port} ready"
+                echo "✓ Worker :${port} ready (attempt $i)"
                 break
+              fi
+              if [ "$i" -eq 24 ]; then
+                echo "ERROR: Worker :${port} did not start"
+                exit 1
               fi
               sleep 5
             done
@@ -211,73 +205,96 @@ jobs:
           curl -sf http://localhost:8000/health | python3 -m json.tool
 
           echo ""
-          echo "=== /api/status (all workers) ==="
-          curl -sf http://localhost:8000/api/status | python3 -m json.tool
+          echo "=== /api/status (aggregate) ==="
+          STATUS_JSON=$(curl -sf http://localhost:8000/api/status)
+          echo "$STATUS_JSON" | python3 -m json.tool
+          ALL_OK=$(echo "$STATUS_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('all_healthy','false'))")
+          if [ "$ALL_OK" != "True" ]; then
+            echo "WARNING: Not all workers healthy, but continuing smoke test"
+          fi
 
           echo ""
-          echo "=== TTS Base /health ==="
-          curl -sf http://localhost:8001/health | python3 -m json.tool
+          echo "=== TTS Workers /health ==="
+          for port in 8001 8002 8003; do
+            echo "--- port $port ---"
+            curl -sf http://localhost:${port}/health | python3 -m json.tool
+          done
 
-          echo ""
-          echo "=== TTS Custom /health ==="
-          curl -sf http://localhost:8002/health | python3 -m json.tool
-
-          echo ""
-          echo "=== TTS Design /health ==="
-          curl -sf http://localhost:8003/health | python3 -m json.tool
-
-      - name: E2E smoke – create project and synthesize
+      - name: E2E smoke test – full pipeline
         run: |
-          echo "--- Create project ---"
+          set -e
+
+          echo "=== 1. Create project ==="
           PROJECT=$(curl -sf -X POST http://localhost:8000/api/projects \
             -H 'Content-Type: application/json' \
-            -d '{"name":"smoke-test","description":"CI smoke test"}')
+            -d '{"name":"ci-smoke","description":"GitHub Actions smoke test"}')
           echo "$PROJECT" | python3 -m json.tool
           PROJECT_ID=$(echo "$PROJECT" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
           echo "PROJECT_ID=$PROJECT_ID"
 
-          echo "--- Upload sample text ---"
+          echo ""
+          echo "=== 2. Upload sample text ==="
           curl -sf -X POST "http://localhost:8000/api/projects/${PROJECT_ID}/upload_text" \
             -F "file=@/app/samples/sample_novel.txt" | python3 -m json.tool
 
-          echo "--- Preprocess ---"
-          curl -sf -X POST "http://localhost:8000/api/projects/${PROJECT_ID}/preprocess" \
-            | python3 -m json.tool
+          echo ""
+          echo "=== 3. Preprocess ==="
+          PREP=$(curl -sf -X POST "http://localhost:8000/api/projects/${PROJECT_ID}/preprocess")
+          echo "$PREP" | python3 -m json.tool
+          SEG_COUNT=$(echo "$PREP" | python3 -c "import sys,json; print(json.load(sys.stdin)['segment_count'])")
+          echo "Segments: $SEG_COUNT"
+          [ "$SEG_COUNT" -gt 0 ] || (echo "ERROR: no segments" && exit 1)
 
-          echo "--- Segment speakers ---"
-          curl -sf -X POST "http://localhost:8000/api/projects/${PROJECT_ID}/segment_speakers" \
-            | python3 -m json.tool
+          echo ""
+          echo "=== 4. Segment speakers ==="
+          SEG=$(curl -sf -X POST "http://localhost:8000/api/projects/${PROJECT_ID}/segment_speakers")
+          echo "$SEG" | python3 -m json.tool
 
-          echo "--- Render (mock TTS) ---"
-          curl -sf -X POST "http://localhost:8000/api/projects/${PROJECT_ID}/render" \
-            | python3 -m json.tool
+          echo ""
+          echo "=== 5. Start render (mock TTS) ==="
+          JOB=$(curl -sf -X POST "http://localhost:8000/api/projects/${PROJECT_ID}/render")
+          echo "$JOB" | python3 -m json.tool
+          JOB_STATUS=$(echo "$JOB" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+          echo "Job status: $JOB_STATUS"
 
-          echo "--- Wait for render to complete (max 60s) ---"
-          for i in $(seq 1 12); do
-            STATUS=$(curl -sf "http://localhost:8000/api/projects/${PROJECT_ID}/render/status" \
-              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'] if d else 'none')")
-            echo "  render status: $STATUS"
+          echo ""
+          echo "=== 6. Poll render status (max 90s) ==="
+          for i in $(seq 1 18); do
+            RENDER=$(curl -sf "http://localhost:8000/api/projects/${PROJECT_ID}/render/status")
+            STATUS=$(echo "$RENDER" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['status'] if d else 'none')")
+            DONE=$(echo "$RENDER"  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('done_segments',0) if d else 0)")
+            TOTAL=$(echo "$RENDER" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('total_segments',0) if d else 0)")
+            echo "  [$i/18] status=$STATUS  done=$DONE/$TOTAL"
             if [[ "$STATUS" == "done" || "$STATUS" == "error" ]]; then break; fi
             sleep 5
           done
-
-          echo "--- Final render status ---"
+          echo "Final render status:"
           curl -sf "http://localhost:8000/api/projects/${PROJECT_ID}/render/status" | python3 -m json.tool
 
-          echo "--- Merge audio ---"
-          curl -sf -X POST "http://localhost:8000/api/projects/${PROJECT_ID}/merge" \
-            | python3 -m json.tool
+          echo ""
+          echo "=== 7. Merge audio ==="
+          curl -sf -X POST "http://localhost:8000/api/projects/${PROJECT_ID}/merge" | python3 -m json.tool
 
-          echo "--- List artifacts ---"
-          curl -sf "http://localhost:8000/api/projects/${PROJECT_ID}/artifacts" | python3 -m json.tool
+          echo ""
+          echo "=== 8. List artifacts ==="
+          ARTS=$(curl -sf "http://localhost:8000/api/projects/${PROJECT_ID}/artifacts")
+          echo "$ARTS" | python3 -m json.tool
+          ART_COUNT=$(echo "$ARTS" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
+          echo "Artifacts created: $ART_COUNT"
+          [ "$ART_COUNT" -gt 0 ] || (echo "ERROR: no artifacts" && exit 1)
 
-      - name: Show container logs on failure
+          echo ""
+          echo "✅ E2E smoke test PASSED"
+
+      - name: Show logs on failure
         if: failure()
         run: |
-          echo "=== supervisord log ==="
-          docker exec nc_smoke cat /var/log/novelconverter/supervisord.log 2>/dev/null || true
-          echo "=== orchestrator log ==="
-          docker exec nc_smoke cat /var/log/novelconverter/orchestrator.log 2>/dev/null || true
+          echo "=== supervisord ==="
+          docker exec nc_smoke cat /var/log/novelconverter/supervisord.log 2>/dev/null | tail -50 || true
+          echo "=== orchestrator ==="
+          docker exec nc_smoke cat /var/log/novelconverter/orchestrator.log 2>/dev/null | tail -80 || true
+          echo "=== tts_custom ==="
+          docker exec nc_smoke cat /var/log/novelconverter/tts_custom.log 2>/dev/null | tail -30 || true
           echo "=== docker logs ==="
           docker logs nc_smoke 2>&1 | tail -100
 
@@ -286,7 +303,7 @@ jobs:
         run: docker rm -f nc_smoke 2>/dev/null || true
 
   # ===========================================================================
-  # Job 3 – RunPod status check (optional, requires secrets)
+  # Job 3 – RunPod status check (optional, runs only if secrets set)
   # ===========================================================================
   runpod-status:
     name: RunPod Status Check
@@ -295,39 +312,43 @@ jobs:
     if: ${{ secrets.RUNPOD_API_KEY != '' && secrets.RUNPOD_POD_ID != '' }}
 
     steps:
-      - name: Check RunPod pod status
+      - name: Check RunPod pod status via GraphQL API
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           RUNPOD_POD_ID: ${{ secrets.RUNPOD_POD_ID }}
         run: |
-          echo "=== Checking RunPod pod status ==="
+          echo "=== RunPod pod status ==="
           RESPONSE=$(curl -sf \
             -H "Content-Type: application/json" \
             -d "{\"query\": \"query { pod(input: {podId: \\\"$RUNPOD_POD_ID\\\"}) { id name desiredStatus runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } } } }\"}" \
             "https://api.runpod.io/graphql?api_key=$RUNPOD_API_KEY")
           echo "$RESPONSE" | python3 -m json.tool
 
-      - name: Write RunPod deployment instructions
+          POD_STATUS=$(echo "$RESPONSE" | python3 -c \
+            "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('pod',{}).get('desiredStatus','unknown'))")
+          echo "Pod desiredStatus: $POD_STATUS"
+
+      - name: Write RunPod deployment summary
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-          echo "## 🚀 RunPod Deployment" >> $GITHUB_STEP_SUMMARY
+          IMAGE="${{ env.IMAGE_NAME }}:latest"
+          echo "## 🚀 RunPod Deployment Info" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "New image available:" >> $GITHUB_STEP_SUMMARY
+          echo "### New image ready" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "$IMAGE" >> $GITHUB_STEP_SUMMARY
+          echo "docker.io/$IMAGE" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### RunPod Pod Settings" >> $GITHUB_STEP_SUMMARY
           echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Container Image | \`$IMAGE\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Container Disk | 20GB+ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Volume Disk | 50GB+ (for models) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Volume Mount Path | \`/workspace\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Container Disk | 20 GB+ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Volume Disk | 50 GB+ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Volume Mount | \`/workspace\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Expose HTTP Port | \`8000\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| GPU | RTX 3090 / A100 recommended |" >> $GITHUB_STEP_SUMMARY
+          echo "| GPU | RTX 3090 / A100 推奨 |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Environment Variables for RunPod" >> $GITHUB_STEP_SUMMARY
+          echo "### Required Environment Variables" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "TTS_CUSTOM_USE_REAL=true" >> $GITHUB_STEP_SUMMARY
           echo "TTS_DESIGN_USE_REAL=true" >> $GITHUB_STEP_SUMMARY
