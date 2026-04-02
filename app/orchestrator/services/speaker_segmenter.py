@@ -1,10 +1,15 @@
-"""Speaker segmentation: rule-based pre-pass + LLM estimation."""
+"""Speaker segmentation: rule-based pre-pass + LLM estimation.
+
+Supports a configurable DiarizationConfig so users can pick/combine rules
+interactively (diarization studio). Falls back to the default pipeline when
+no config is supplied (backwards compatible).
+"""
 from __future__ import annotations
 
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 import requests
@@ -29,29 +34,130 @@ class AnnotatedSegment:
     is_chapter_header: bool = False
 
 
+# ── Rule catalogue ─────────────────────────────────────────────────────────────
+
+AVAILABLE_RULES: dict[str, dict] = {
+    "dialogue_brackets": {
+        "label": "対話括弧ルール「」『』",
+        "description": "「」『』で囲まれたセグメントを dialogue として分類します",
+        "params": {},
+    },
+    "thought_brackets": {
+        "label": "心内文括弧ルール（）",
+        "description": "（）で囲まれたセグメントを thought として分類します",
+        "params": {},
+    },
+    "narration_clues": {
+        "label": "語り手キーワードルール",
+        "description": "「と言った」などの語りキーワードを含むセグメントを narration として分類します",
+        "params": {
+            "keywords": {
+                "type": "list",
+                "default": [
+                    "と言った", "と答えた", "と叫んだ", "と呟いた",
+                    "と続けた", "と笑った", "と怒った", "と泣いた",
+                    "は言った", "は答えた", "が言った",
+                ],
+            },
+        },
+    },
+    "speaker_propagation": {
+        "label": "話者伝搬ルール",
+        "description": "直前の既知話者を隣接する unknown dialogue に伝搬します",
+        "params": {},
+    },
+    "llm_refinement": {
+        "label": "LLM推定ルール",
+        "description": "llama.cpp サーバーを使って低信頼度セグメントを再推定します",
+        "params": {
+            "confidence_threshold": {
+                "type": "float",
+                "default": 0.8,
+                "min": 0.0,
+                "max": 1.0,
+                "step": 0.05,
+            },
+        },
+    },
+}
+
+DEFAULT_RULE_ORDER = list(AVAILABLE_RULES.keys())
+
+
+@dataclass
+class RuleSpec:
+    rule_id: str
+    enabled: bool = True
+    params: dict = field(default_factory=dict)
+
+
+@dataclass
+class DiarizationConfig:
+    rules: List[RuleSpec] = field(
+        default_factory=lambda: [RuleSpec(r) for r in DEFAULT_RULE_ORDER]
+    )
+
+    def get_rule(self, rule_id: str) -> Optional[RuleSpec]:
+        for r in self.rules:
+            if r.rule_id == rule_id and r.enabled:
+                return r
+        return None
+
+
 # ── Rule-based pre-pass ───────────────────────────────────────────────────────
 
 _DIALOGUE_RE = re.compile(r"^[「『](.+)[」』]$", re.DOTALL)
 _THOUGHT_RE = re.compile(r"^[（(](.+)[）)]$", re.DOTALL)
-_NARR_CLUES = re.compile(r"(と言った|と答えた|と叫んだ|と呟いた|と続けた|と笑った|と怒った|と泣いた|は言った|は答えた|が言った)", re.IGNORECASE)
+_DEFAULT_NARR_CLUES = re.compile(
+    r"(と言った|と答えた|と叫んだ|と呟いた|と続けた|と笑った|と怒った|と泣いた|は言った|は答えた|が言った)",
+    re.IGNORECASE,
+)
 
 
-def _rule_based_classify(text: str) -> tuple[str, float]:
+def _build_narr_re(keywords: list[str]) -> re.Pattern:
+    escaped = [re.escape(k) for k in keywords]
+    return re.compile("(" + "|".join(escaped) + ")", re.IGNORECASE)
+
+
+def _rule_based_classify(
+    text: str,
+    *,
+    use_dialogue: bool = True,
+    use_thought: bool = True,
+    narr_re: Optional[re.Pattern] = None,
+) -> tuple[str, float]:
     """Return (segment_type, confidence)."""
     t = text.strip()
-    if _DIALOGUE_RE.match(t):
+    if use_dialogue and _DIALOGUE_RE.match(t):
         return "dialogue", 0.85
-    if _THOUGHT_RE.match(t):
+    if use_thought and _THOUGHT_RE.match(t):
         return "thought", 0.80
-    # Short text with dialogue marker nearby
-    if "「" in t or "『" in t:
+    if use_dialogue and ("「" in t or "『" in t):
         return "dialogue", 0.60
-    if _NARR_CLUES.search(t):
+    clues = narr_re if narr_re is not None else _DEFAULT_NARR_CLUES
+    if clues and clues.search(t):
         return "narration", 0.70
     return "narration", 0.50
 
 
-def rule_based_pass(segments: List[RawSegment]) -> List[AnnotatedSegment]:
+def rule_based_pass(
+    segments: List[RawSegment],
+    config: Optional[DiarizationConfig] = None,
+) -> List[AnnotatedSegment]:
+    use_dialogue = True
+    use_thought = True
+    narr_re: Optional[re.Pattern] = None
+
+    if config is not None:
+        use_dialogue = config.get_rule("dialogue_brackets") is not None
+        use_thought = config.get_rule("thought_brackets") is not None
+        narr_spec = config.get_rule("narration_clues")
+        if narr_spec is not None:
+            kws = narr_spec.params.get("keywords", AVAILABLE_RULES["narration_clues"]["params"]["keywords"]["default"])
+            narr_re = _build_narr_re(kws)
+        else:
+            narr_re = re.compile(r"(?!)")  # never matches
+
     annotated: List[AnnotatedSegment] = []
     for seg in segments:
         text = seg.text.strip()
@@ -68,7 +174,12 @@ def rule_based_pass(segments: List[RawSegment]) -> List[AnnotatedSegment]:
                 is_chapter_header=True,
             ))
             continue
-        stype, conf = _rule_based_classify(text)
+        stype, conf = _rule_based_classify(
+            text,
+            use_dialogue=use_dialogue,
+            use_thought=use_thought,
+            narr_re=narr_re,
+        )
         speaker = "narrator" if stype == "narration" else "unknown"
         annotated.append(AnnotatedSegment(
             chapter_index=seg.chapter_index,
@@ -85,9 +196,6 @@ def rule_based_pass(segments: List[RawSegment]) -> List[AnnotatedSegment]:
 
 # ── LLM adapter ───────────────────────────────────────────────────────────────
 
-LLM_API_URL = os.environ.get("LLM_API_URL", "")
-LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
-LLM_MODEL   = os.environ.get("LLM_MODEL", "gpt-4o-mini")
 LLM_CONTEXT_WINDOW = 8  # segments around target for context
 
 _SYSTEM_PROMPT = """あなたは日本語の小説・ラノベの話者分割AIです。
@@ -106,18 +214,32 @@ _SYSTEM_PROMPT = """あなたは日本語の小説・ラノベの話者分割AI�
 JSONのみ返してください。説明文は不要です。"""
 
 
+def _get_llm_api_url() -> str:
+    """Dynamically read LLM_API_URL so llm_manager changes take effect."""
+    return os.environ.get("LLM_API_URL", "")
+
+
+def _get_llm_api_key() -> str:
+    return os.environ.get("LLM_API_KEY", "")
+
+
+def _get_llm_model() -> str:
+    return os.environ.get("LLM_MODEL", "gpt-4o-mini")
+
+
 def _llm_annotate_batch(
-    segments: List[AnnotatedSegment], batch: List[AnnotatedSegment]
+    segments: List[AnnotatedSegment],
+    batch: List[AnnotatedSegment],
 ) -> List[dict]:
     """Call LLM for a batch and return list of dicts."""
-    if not LLM_API_URL:
+    llm_url = _get_llm_api_url()
+    if not llm_url:
         return []
 
     # build context
     all_indices = {s.order_index: s for s in segments}
     target_idx = [s.order_index for s in batch]
 
-    # include surrounding context
     context_set = set(target_idx)
     for idx in target_idx:
         for d in range(-LLM_CONTEXT_WINDOW, LLM_CONTEXT_WINDOW + 1):
@@ -137,11 +259,12 @@ def _llm_annotate_batch(
     user_content += f"\n\nTARGETのorder_indexは {target_idx} です。これらのみ結果に含めてください。"
 
     headers = {"Content-Type": "application/json"}
-    if LLM_API_KEY:
-        headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+    api_key = _get_llm_api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     payload = {
-        "model": LLM_MODEL,
+        "model": _get_llm_model(),
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
@@ -152,14 +275,13 @@ def _llm_annotate_batch(
 
     try:
         resp = requests.post(
-            f"{LLM_API_URL.rstrip('/')}/chat/completions",
+            f"{llm_url.rstrip('/')}/chat/completions",
             json=payload,
             headers=headers,
             timeout=60,
         )
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"].strip()
-        # strip markdown code fences if present
         content = re.sub(r"```json\s*", "", content)
         content = re.sub(r"```\s*", "", content)
         return json.loads(content)
@@ -170,26 +292,41 @@ def _llm_annotate_batch(
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-BATCH_SIZE = 20  # segments per LLM call
+BATCH_SIZE = 20
 
 
-def segment_speakers(raw_segments: List[RawSegment]) -> List[AnnotatedSegment]:
-    """Full pipeline: rule-based → LLM refinement."""
-    annotated = rule_based_pass(raw_segments)
+def segment_speakers(
+    raw_segments: List[RawSegment],
+    config: Optional[DiarizationConfig] = None,
+) -> List[AnnotatedSegment]:
+    """Full pipeline: rule-based → LLM refinement.
 
-    if not LLM_API_URL:
-        logger.info("LLM_API_URL not set – using rule-based only")
-        _apply_speaker_propagation(annotated)
+    ``config`` is optional. When omitted the full default pipeline runs,
+    which is equivalent to all rules enabled – matching original behaviour.
+    """
+    annotated = rule_based_pass(raw_segments, config=config)
+
+    llm_url = _get_llm_api_url()
+    run_llm = llm_url != ""
+    if config is not None:
+        run_llm = run_llm and (config.get_rule("llm_refinement") is not None)
+
+    if not run_llm:
+        logger.info("LLM refinement disabled – using rule-based only")
+        _maybe_apply_propagation(annotated, config)
         return annotated
 
-    # Batch LLM calls for non-chapter, low-confidence segments
+    llm_spec = config.get_rule("llm_refinement") if config else None
+    conf_threshold = float(
+        (llm_spec.params.get("confidence_threshold") if llm_spec else None) or 0.8
+    )
+
     targets = [
         s for s in annotated
-        if not s.is_chapter_header and (s.confidence < 0.8 or s.predicted_speaker == "unknown")
+        if not s.is_chapter_header and (s.confidence < conf_threshold or s.predicted_speaker == "unknown")
     ]
-    logger.info(f"LLM refinement for {len(targets)} segments")
+    logger.info(f"LLM refinement for {len(targets)} segments (threshold={conf_threshold})")
 
-    # group into batches
     for i in range(0, len(targets), BATCH_SIZE):
         batch = targets[i : i + BATCH_SIZE]
         results = _llm_annotate_batch(annotated, batch)
@@ -203,8 +340,16 @@ def segment_speakers(raw_segments: List[RawSegment]) -> List[AnnotatedSegment]:
                 seg.confidence = float(r.get("confidence", seg.confidence))
                 seg.reason = r.get("reason", seg.reason) + " (llm)"
 
-    _apply_speaker_propagation(annotated)
+    _maybe_apply_propagation(annotated, config)
     return annotated
+
+
+def _maybe_apply_propagation(
+    segments: List[AnnotatedSegment],
+    config: Optional[DiarizationConfig],
+) -> None:
+    if config is None or config.get_rule("speaker_propagation") is not None:
+        _apply_speaker_propagation(segments)
 
 
 def _apply_speaker_propagation(segments: List[AnnotatedSegment]) -> None:
@@ -220,10 +365,6 @@ def _apply_speaker_propagation(segments: List[AnnotatedSegment]) -> None:
 
 
 # ── Speaker consolidation ─────────────────────────────────────────────────────
-
-_ALIAS_GROUPS = [
-    # add project-specific patterns here
-]
 
 def build_speaker_list(segments: List[AnnotatedSegment]) -> List[dict]:
     """Return unique speakers with counts."""

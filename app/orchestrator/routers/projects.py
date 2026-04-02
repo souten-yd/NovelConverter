@@ -73,6 +73,7 @@ def upload_text(
 
     dest = project_dir / summary.normalized_filename
     project.raw_text_path = str(dest)
+    project.uploaded_filename = summary.original_upload_name
     project.status = "uploaded"
     db.commit()
     db.refresh(project)

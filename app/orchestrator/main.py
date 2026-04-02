@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.shared.database import init_db
 from app.shared.logger import get_logger
-from app.orchestrator.routers import projects, processing, segments, voice_mapping, render, ui
+from app.orchestrator.routers import projects, processing, segments, voice_mapping, render, ui, llm
 
 logger = get_logger("orchestrator")
 
@@ -37,6 +37,7 @@ app.include_router(processing.router)
 app.include_router(segments.router)
 app.include_router(voice_mapping.router)
 app.include_router(render.router)
+app.include_router(llm.router)
 app.include_router(ui.router)  # must be last (catch-all pages)
 
 
