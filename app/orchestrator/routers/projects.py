@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from app.shared.database import get_db
@@ -12,7 +12,7 @@ from app.shared.models import Project
 from app.shared.schemas import ProjectCreate, ProjectOut
 from app.shared.logger import get_logger
 from app.shared.paths import get_data_dir
-from app.orchestrator.services.ingest import load_text_file, save_project_text
+from app.orchestrator.services.ingest import UPLOAD_EXTENSIONS, ingest_uploaded_file
 
 logger = get_logger("router.projects")
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -56,25 +56,32 @@ def upload_text(
     db: Session = Depends(get_db),
 ):
     project = _get_project_or_404(project_id, db)
-    raw = file.file.read()
-
-    # save to temp, detect encoding
-    import tempfile, os
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp:
-        tmp.write(raw)
-        tmp_path = Path(tmp.name)
-
-    try:
-        text = load_text_file(tmp_path)
-    finally:
-        os.unlink(tmp_path)
+    filename = file.filename or "upload.bin"
+    ext = Path(filename).suffix.lower()
+    if ext not in UPLOAD_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported extension: {ext}")
 
     project_dir = _projects_dir() / project_id
-    dest = save_project_text(project_dir, text, filename=file.filename or "upload.txt")
+    temp_dir = project_dir / "temp_ingest"
+    try:
+        summary = ingest_uploaded_file(file, project_dir=project_dir, temp_root=temp_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Ingest failed")
+        raise HTTPException(status_code=500, detail=f"Ingest failed: {exc}") from exc
 
+    dest = project_dir / summary.normalized_filename
     project.raw_text_path = str(dest)
     project.status = "uploaded"
     db.commit()
     db.refresh(project)
-    logger.info(f"Uploaded text to project {project_id}: {dest}")
-    return {"project_id": project_id, "path": str(dest), "char_count": len(text)}
+    logger.info(f"Uploaded source to project {project_id}: {dest}")
+    return {
+        "project_id": project_id,
+        "path": str(dest),
+        "char_count": summary.char_count,
+        "source_type": summary.source_type,
+        "extracted_files": summary.extracted_files,
+        "warnings": summary.warnings,
+    }

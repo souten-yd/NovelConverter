@@ -7,7 +7,7 @@
 ## システム概要
 
 ```
-[テキスト] → [前処理] → [話者分割] → [TTS生成] → [結合] → [オーディオブック(.wav/.m4b)]
+[入力正規化(txt/zip/rar/epub/画像→UTF-8 text)] → [前処理] → [話者分割] → [TTS生成] → [結合] → [オーディオブック(.wav/.m4b)]
 ```
 
 ### 4サービス構成
@@ -62,6 +62,15 @@ scripts\setup\setup_tts_design.bat
 
 ---
 
+### 追加のシステム依存
+
+入力正規化で以下を利用します。Pythonパッケージのインストールに加えて、必要に応じてOS側の導入を行ってください。
+
+- OCR (`pytesseract`) を使う場合: **Tesseract OCR 本体** が必要
+- RAR (`rarfile`) を使う場合: **unrar / 7zip / bsdtar** などのバックエンドコマンドが必要
+
+未導入の場合はクラッシュではなく、アップロード結果の warning/エラー理由として表示されます（例: `RAR backend missing`）。
+
 ## 起動方法
 
 ### 全サービスを一括起動 (Linux/macOS)
@@ -106,8 +115,9 @@ http://localhost:8000
 
 ### 2. テキストアップロード
 
-1. プロジェクト詳細ページで `.txt` ファイルを選択してアップロード
-2. UTF-8 / UTF-8 BOM / Shift-JIS に対応
+1. プロジェクト詳細ページで原稿ファイルを選択してアップロード (`.txt/.zip/.rar/.epub/.png/.jpg/.jpeg/.webp/.bmp/.tiff/.tif`)
+2. `.zip/.rar` 内の `.txt/.md/.epub/画像` も再帰的に処理され、最終的に UTF-8 正規化テキストへ統合されます
+3. `.txt` は UTF-8 / UTF-8 BOM / Shift-JIS に対応
 
 ### 3. 前処理
 
