@@ -227,7 +227,7 @@ jobs:
 
       - name: E2E smoke test – full pipeline
         run: |
-          set -e
+          set -euo pipefail
 
           echo "=== 1. Create project ==="
           PROJECT=$(curl -sf -X POST http://localhost:8000/api/projects \
@@ -239,8 +239,12 @@ jobs:
 
           echo ""
           echo "=== 2. Upload sample text ==="
-          curl -sf -X POST "http://localhost:8000/api/projects/${PROJECT_ID}/upload_text" \
-            -F "file=@/app/samples/sample_novel.txt" | python3 -m json.tool
+          SAMPLE_FILE=/app/samples/sample_novel.txt
+          [ -f "$SAMPLE_FILE" ] || (echo "ERROR: sample file not found: $SAMPLE_FILE" && exit 1)
+          UPLOAD=$(curl --fail-with-body -sS -X POST "http://localhost:8000/api/projects/${PROJECT_ID}/upload_text" \
+            -F "file=@${SAMPLE_FILE}")
+          [ -n "$UPLOAD" ] || (echo "ERROR: upload response was empty" && exit 1)
+          echo "$UPLOAD" | python3 -m json.tool
 
           echo ""
           echo "=== 3. Preprocess ==="
