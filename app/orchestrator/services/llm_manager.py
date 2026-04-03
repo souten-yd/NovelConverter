@@ -66,10 +66,35 @@ def _get_llama_server_bin() -> str:
     return os.environ.get("LLAMA_SERVER_BIN", "llama-server")
 
 
+def _llama_server_candidates() -> List[str]:
+    """Return binary candidates in discovery order."""
+    configured = os.environ.get("LLAMA_SERVER_BIN")
+    if configured:
+        return [configured]
+    return [
+        "llama-server",
+        "llama-server.exe",
+        "./llama-server",
+        "./build/bin/llama-server",
+        "./llama.cpp/build/bin/llama-server",
+    ]
+
+
+def _resolve_llama_server_bin() -> Optional[str]:
+    """Resolve llama-server path from env or common local build locations."""
+    for candidate in _llama_server_candidates():
+        expanded = Path(candidate).expanduser()
+        if expanded.is_file():
+            return str(expanded)
+        found = shutil.which(candidate)
+        if found:
+            return found
+    return None
+
+
 def check_binary_available() -> bool:
     """Return True if the llama-server binary can be found."""
-    bin_path = _get_llama_server_bin()
-    return shutil.which(bin_path) is not None or Path(bin_path).is_file()
+    return _resolve_llama_server_bin() is not None
 
 
 def _update_env_url(url: str) -> None:
@@ -113,11 +138,15 @@ def load_model(
             port=LLAMA_SERVER_PORT,
         )
 
-    llama_bin = _get_llama_server_bin()
-    if not (shutil.which(llama_bin) or Path(llama_bin).is_file()):
+    llama_bin = _resolve_llama_server_bin()
+    if not llama_bin:
+        configured_bin = _get_llama_server_bin()
         with _lock:
             _state.status = "error"
-            _state.error = f"llama-server binary not found at '{llama_bin}'. Set LLAMA_SERVER_BIN env var."
+            _state.error = (
+                f"llama-server binary not found at '{configured_bin}'. "
+                "Set LLAMA_SERVER_BIN env var or place llama-server under ./build/bin."
+            )
         logger.error(_state.error)
         return LlmServerState(**_state.__dict__)
 
@@ -139,9 +168,13 @@ def load_model(
             text=True,
         )
     except FileNotFoundError:
+        configured_bin = _get_llama_server_bin()
         with _lock:
             _state.status = "error"
-            _state.error = f"llama-server binary not found at '{llama_bin}'. Set LLAMA_SERVER_BIN env var."
+            _state.error = (
+                f"llama-server binary not found at '{configured_bin}'. "
+                "Set LLAMA_SERVER_BIN env var or place llama-server under ./build/bin."
+            )
         logger.error(_state.error)
         return LlmServerState(**_state.__dict__)
 
