@@ -57,6 +57,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     tar \
     ffmpeg \
+    tesseract-ocr \
+    tesseract-ocr-jpn \
+    unrar-free \
+    p7zip-full \
+    libarchive-tools \
     libsndfile1 \
     libsndfile1-dev \
     build-essential \

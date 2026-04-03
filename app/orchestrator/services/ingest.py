@@ -51,6 +51,7 @@ class IngestSummary:
     warnings: list[str]
     char_count: int
     normalized_filename: str
+    upload_size_bytes: int
 
 
 def detect_encoding(raw: bytes) -> str:
@@ -393,4 +394,5 @@ def ingest_uploaded_file(upload_file: Any, project_dir: Path, temp_root: Path) -
         warnings=warnings,
         char_count=len(combined),
         normalized_filename=normalized_filename,
+        upload_size_bytes=len(raw),
     )

@@ -41,8 +41,17 @@ class RawSegment:
 
 def preprocess(raw_text: str) -> List[RawSegment]:
     """Full preprocessing pipeline. Returns ordered RawSegment list."""
+    raw_chars = len(raw_text)
+    raw_lines = raw_text.count("\n") + (1 if raw_text else 0)
+    trimmed_chars = len(raw_text.strip())
+    logger.info(
+        f"Preprocess stage[input]: chars={raw_chars}, lines={raw_lines}, trimmed_chars={trimmed_chars}"
+    )
+
     text = _normalize_whitespace(raw_text)
+    logger.info(f"Preprocess stage[normalize]: chars={len(text)}")
     chapters = _split_chapters(text)
+    logger.info(f"Preprocess stage[chapter_split]: chapters={len(chapters)}")
     segments: List[RawSegment] = []
     order = 0
     for chap_idx, (header, body) in enumerate(chapters):
@@ -52,6 +61,15 @@ def preprocess(raw_text: str) -> List[RawSegment]:
         para_segments = _split_body(body, chap_idx, order)
         segments.extend(para_segments)
         order += len(para_segments)
+
+    if not segments:
+        logger.warning("Preprocess stage[segment_split]: 0 segments, activating paragraph fallback")
+        fallback_segments = _fallback_split(text)
+        for s in fallback_segments:
+            segments.append(RawSegment(0, order, s))
+            order += 1
+        logger.info(f"Preprocess stage[fallback]: segments={len(fallback_segments)}")
+
     logger.info(f"Preprocessed → {len(segments)} segments across {len(chapters)} chapter(s)")
     return segments
 
@@ -173,3 +191,16 @@ def _split_paragraph(para: str) -> List[str]:
 
 def _hard_split(text: str, size: int) -> List[str]:
     return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+def _fallback_split(text: str) -> List[str]:
+    """Fallback splitter to avoid zero segments when parser output is empty."""
+    if not text.strip():
+        return []
+    paras = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+    if paras:
+        return paras
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if lines:
+        return lines
+    return [text.strip()]

@@ -72,6 +72,12 @@ def upload_text(
         raise HTTPException(status_code=500, detail=f"Ingest failed: {exc}") from exc
 
     dest = project_dir / summary.normalized_filename
+    raw_text = dest.read_text(encoding="utf-8")
+    raw_text_preview = raw_text[:300]
+    logger.info(
+        f"Upload normalized text saved: project={project_id} path={dest} "
+        f"upload_size_bytes={summary.upload_size_bytes} preview={raw_text_preview!r}"
+    )
     project.raw_text_path = str(dest)
     project.uploaded_filename = summary.original_upload_name
     project.status = "uploaded"
@@ -82,7 +88,10 @@ def upload_text(
         "project_id": project_id,
         "path": str(dest),
         "char_count": summary.char_count,
+        "upload_size_bytes": summary.upload_size_bytes,
         "source_type": summary.source_type,
+        "raw_text_path": str(dest),
+        "raw_text_preview": raw_text_preview,
         "extracted_files": summary.extracted_files,
         "warnings": summary.warnings,
     }

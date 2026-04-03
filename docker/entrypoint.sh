@@ -115,6 +115,19 @@ else
     echo "[entrypoint] nvidia-smi: command not found"
 fi
 
+if command -v tesseract >/dev/null 2>&1; then
+    echo "[entrypoint] tesseract: $(command -v tesseract)"
+    tesseract --version | head -n1 || true
+else
+    echo "[entrypoint] WARNING: tesseract not found (OCR unavailable)"
+fi
+
+if command -v unrar >/dev/null 2>&1 || command -v 7z >/dev/null 2>&1 || command -v bsdtar >/dev/null 2>&1; then
+    echo "[entrypoint] archive backend: unrar=$(command -v unrar || echo '-') 7z=$(command -v 7z || echo '-') bsdtar=$(command -v bsdtar || echo '-')"
+else
+    echo "[entrypoint] WARNING: no RAR backend command found (unrar/7z/bsdtar)"
+fi
+
 if [[ -x "${LLAMA_SERVER_BIN:-}" ]]; then
     echo "[entrypoint] ldd ${LLAMA_SERVER_BIN}:"
     ldd "${LLAMA_SERVER_BIN}" || true
