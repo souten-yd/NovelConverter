@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -16,7 +17,6 @@ from app.shared.paths import get_data_dir
 
 logger = get_logger("llm_manager")
 
-LLAMA_SERVER_BIN = os.environ.get("LLAMA_SERVER_BIN", "llama-server")
 LLAMA_SERVER_PORT = int(os.environ.get("LLAMA_SERVER_PORT", "8080"))
 MODELS_DIR_NAME = "models"
 
@@ -61,6 +61,17 @@ def _is_server_healthy() -> bool:
         return False
 
 
+def _get_llama_server_bin() -> str:
+    """Read LLAMA_SERVER_BIN env var at call time so changes take effect without restart."""
+    return os.environ.get("LLAMA_SERVER_BIN", "llama-server")
+
+
+def check_binary_available() -> bool:
+    """Return True if the llama-server binary can be found."""
+    bin_path = _get_llama_server_bin()
+    return shutil.which(bin_path) is not None or Path(bin_path).is_file()
+
+
 def _update_env_url(url: str) -> None:
     """Patch the process env so speaker_segmenter picks up the new URL."""
     os.environ["LLM_API_URL"] = url
@@ -102,8 +113,16 @@ def load_model(
             port=LLAMA_SERVER_PORT,
         )
 
+    llama_bin = _get_llama_server_bin()
+    if not (shutil.which(llama_bin) or Path(llama_bin).is_file()):
+        with _lock:
+            _state.status = "error"
+            _state.error = f"llama-server binary not found at '{llama_bin}'. Set LLAMA_SERVER_BIN env var."
+        logger.error(_state.error)
+        return LlmServerState(**_state.__dict__)
+
     cmd = [
-        LLAMA_SERVER_BIN,
+        llama_bin,
         "--model", str(model_path),
         "--port", str(LLAMA_SERVER_PORT),
         "--n-gpu-layers", str(n_gpu_layers),
@@ -122,7 +141,7 @@ def load_model(
     except FileNotFoundError:
         with _lock:
             _state.status = "error"
-            _state.error = f"llama-server binary not found at '{LLAMA_SERVER_BIN}'. Set LLAMA_SERVER_BIN env var."
+            _state.error = f"llama-server binary not found at '{llama_bin}'. Set LLAMA_SERVER_BIN env var."
         logger.error(_state.error)
         return LlmServerState(**_state.__dict__)
 

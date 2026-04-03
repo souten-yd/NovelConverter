@@ -1,0 +1,132 @@
+{% extends "mobile_base.html" %}
+{% block title %}LLM管理 – NovelConverter{% endblock %}
+{% block page_title %}LLM管理{% endblock %}
+{% block tab_llm %}active{% endblock %}
+
+{% block content %}
+
+<!-- Binary availability warning (shown dynamically) -->
+<div id="mBinaryWarning" class="m-binary-warning m-hidden">
+  ⚠️ llama-server バイナリが見つかりません。<br>
+  <span style="font-size:12px">LLAMA_SERVER_BIN 環境変数を設定するか、llama.cpp をインストールしてください。</span>
+</div>
+
+<!-- Server status card -->
+<div class="m-status-card">
+  <div class="m-status-row">
+    <span style="font-size:15px;font-weight:600">サーバー状態</span>
+    <span id="mStatusBadge" class="m-status-badge stopped">停止中</span>
+  </div>
+  <div id="mStatusDetail" class="m-status-detail"></div>
+  <div style="margin-top:14px">
+    <button id="mBtnUnload" class="m-btn m-btn-danger" onclick="mUnload()" disabled>アンロード</button>
+  </div>
+</div>
+
+<!-- Local models -->
+<div class="m-section-header">ローカルモデル</div>
+<div id="mModelList" class="m-list-group">
+  <div class="m-list-item"><span class="m-text-muted">読み込み中...</span></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+let statusData = { status: 'stopped' };
+
+async function refreshStatus() {
+  try {
+    const r = await fetch('/api/llm/status');
+    statusData = await r.json();
+  } catch { return; }
+
+  const badge = document.getElementById('mStatusBadge');
+  const detail = document.getElementById('mStatusDetail');
+  const unloadBtn = document.getElementById('mBtnUnload');
+  const warning = document.getElementById('mBinaryWarning');
+
+  // Binary warning
+  if (statusData.binary_available === false) {
+    warning.classList.remove('m-hidden');
+  } else {
+    warning.classList.add('m-hidden');
+  }
+
+  // Badge
+  badge.className = `m-status-badge ${statusData.status}`;
+  const labels = { stopped: '停止中', loading: '起動中', running: '稼働中', error: 'エラー' };
+  badge.textContent = labels[statusData.status] || statusData.status;
+
+  // Detail
+  if (statusData.status === 'running') {
+    detail.textContent = `${statusData.model_filename} · port ${statusData.port}`;
+  } else if (statusData.status === 'error' && statusData.error) {
+    detail.textContent = statusData.error;
+    detail.style.color = 'var(--error)';
+  } else {
+    detail.textContent = '';
+    detail.style.color = '';
+  }
+
+  // Unload button
+  unloadBtn.disabled = statusData.status !== 'running';
+}
+
+async function refreshModels() {
+  const list = document.getElementById('mModelList');
+  try {
+    const r = await fetch('/api/llm/models');
+    const models = await r.json();
+    if (!models.length) {
+      list.innerHTML = '<div class="m-list-item"><span class="m-text-muted">モデルがありません</span></div>';
+      return;
+    }
+    list.innerHTML = models.map(m => `
+      <div class="m-list-item" style="flex-direction:column;align-items:stretch;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="m-list-item-body">
+            <div class="m-list-item-title" style="font-size:14px">${m.filename}</div>
+            <div class="m-list-item-subtitle">${m.size_mb} MB${m.loaded ? ' · 稼働中' : ''}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          ${m.loaded
+            ? `<button class="m-btn m-btn-danger m-btn-sm" onclick="mUnload()" style="flex:1">アンロード</button>`
+            : `<button class="m-btn m-btn-primary m-btn-sm" onclick="mLoad('${m.filename}')"
+                 ${statusData.status === 'running' || statusData.status === 'loading' ? 'disabled' : ''}
+                 style="flex:1">ロード</button>`
+          }
+        </div>
+      </div>
+    `).join('');
+  } catch {
+    list.innerHTML = '<div class="m-list-item"><span class="m-text-error">取得失敗</span></div>';
+  }
+}
+
+async function mLoad(filename) {
+  const r = await fetch('/api/llm/load', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_filename: filename }),
+  });
+  await refreshStatus();
+  await refreshModels();
+}
+
+async function mUnload() {
+  await fetch('/api/llm/unload', { method: 'POST' });
+  await refreshStatus();
+  await refreshModels();
+}
+
+async function refresh() {
+  await refreshStatus();
+  await refreshModels();
+}
+
+refresh();
+setInterval(refresh, 6000);
+</script>
+{% endblock %}

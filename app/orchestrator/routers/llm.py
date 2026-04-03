@@ -47,6 +47,7 @@ def get_status():
         "port": state.port,
         "pid": state.pid,
         "error": state.error,
+        "binary_available": llm_manager.check_binary_available(),
     }
 
 
