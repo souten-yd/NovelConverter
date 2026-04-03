@@ -63,7 +63,7 @@ jobs:
 
       - name: Set short SHA
         id: vars
-        run: echo "short_sha=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+        run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
