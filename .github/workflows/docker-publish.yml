@@ -181,6 +181,11 @@ jobs:
             sleep 5
           done
 
+      - name: Verify llama-server binary exists in container
+        run: |
+          docker exec nc_smoke bash -lc 'test -x "${LLAMA_SERVER_BIN:-/opt/llama-cpp/bin/llama-server}"'
+          docker exec nc_smoke bash -lc 'echo "LLAMA_SERVER_BIN=${LLAMA_SERVER_BIN:-unset}"'
+
       - name: Wait for all TTS workers to be ready
         timeout-minutes: 2
         run: |
