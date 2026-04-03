@@ -34,6 +34,7 @@ class LlmServerState:
     port: int = LLAMA_SERVER_PORT
     pid: Optional[int] = None
     error: str = ""
+    stderr: str = ""
 
 
 _state = LlmServerState()
@@ -113,6 +114,7 @@ def get_server_status() -> LlmServerState:
                 # process died
                 _state.status = "error"
                 _state.error = f"llama-server exited with code {_proc.returncode}"
+                _state.stderr = ""
                 _proc = None
         return LlmServerState(**_state.__dict__)
 
@@ -165,7 +167,7 @@ def load_model(
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             text=True,
         )
     except FileNotFoundError:
@@ -187,10 +189,22 @@ def load_model(
     deadline = time.time() + _STARTUP_TIMEOUT
     while time.time() < deadline:
         if proc.poll() is not None:
+            stdout_text, stderr_text = proc.communicate()
+            stderr_text = (stderr_text or "").strip()
+            stdout_text = (stdout_text or "").strip()
+            combined_error_log = stderr_text or stdout_text
             with _lock:
                 _state.status = "error"
-                _state.error = f"llama-server exited early (code {proc.returncode})"
+                _state.stderr = combined_error_log
+                if proc.returncode == -6 and stderr_text:
+                    _state.error = (
+                        f"llama-server exited early (code -6). stderr:\n{stderr_text}"
+                    )
+                else:
+                    _state.error = f"llama-server exited early (code {proc.returncode})"
             logger.error(_state.error)
+            if combined_error_log:
+                logger.error("llama-server startup output:\n%s", combined_error_log)
             return LlmServerState(**_state.__dict__)
         if _is_server_healthy():
             break

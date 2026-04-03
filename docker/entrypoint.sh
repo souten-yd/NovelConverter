@@ -14,7 +14,7 @@ install_llama_server_fallback() {
 
     echo "[entrypoint] llama-server not found. Trying runtime fallback download..."
     release_json="/tmp/llama_release_runtime.json"
-    asset_regex='^llama\.cpp-b[0-9]+-cuda-12\.1\.tar\.gz$'
+    asset_regex='^llama\.cpp-b[0-9]+-cuda-12\.8\.tar\.gz$'
 
     if ! curl -fsSL "https://api.github.com/repos/ai-dock/llama.cpp-cuda/releases/latest" -o "${release_json}"; then
         echo "[entrypoint] WARNING: failed to fetch llama.cpp-cuda release metadata."
@@ -24,7 +24,7 @@ install_llama_server_fallback() {
     asset_url="$(jq -r --arg re "${asset_regex}" '.assets[] | select(.name | test($re)) | .browser_download_url' "${release_json}" | head -n1)"
     asset_name="$(jq -r --arg re "${asset_regex}" '.assets[] | select(.name | test($re)) | .name' "${release_json}" | head -n1)"
     if [[ -z "${asset_url}" || "${asset_url}" == "null" ]]; then
-        echo "[entrypoint] WARNING: no matching CUDA 12.1 llama.cpp artifact found."
+        echo "[entrypoint] WARNING: no matching CUDA 12.8 llama.cpp artifact found."
         rm -f "${release_json}"
         return 1
     fi
@@ -106,6 +106,23 @@ echo "[entrypoint] HF cache: ${HF_HOME:-/workspace/hf_cache}"
 echo "[entrypoint] Mock mode: BASE=${TTS_BASE_USE_REAL:-false} CUSTOM=${TTS_CUSTOM_USE_REAL:-false} DESIGN=${TTS_DESIGN_USE_REAL:-false}"
 echo "[entrypoint] LLM API:   ${LLM_API_URL:-(not set, rule-based only)}"
 ensure_llama_server_ready || true
+
+echo "[entrypoint] Runtime diagnostics:"
+if command -v nvidia-smi &>/dev/null; then
+    echo "[entrypoint] nvidia-smi:"
+    nvidia-smi || true
+else
+    echo "[entrypoint] nvidia-smi: command not found"
+fi
+
+if [[ -x "${LLAMA_SERVER_BIN:-}" ]]; then
+    echo "[entrypoint] ldd ${LLAMA_SERVER_BIN}:"
+    ldd "${LLAMA_SERVER_BIN}" || true
+    echo "[entrypoint] ${LLAMA_SERVER_BIN} --version:"
+    "${LLAMA_SERVER_BIN}" --version || true
+else
+    echo "[entrypoint] llama-server diagnostics skipped: LLAMA_SERVER_BIN is not executable (${LLAMA_SERVER_BIN:-unset})"
+fi
 
 # ── GPU check ─────────────────────────────────────────────────────────────────
 if command -v nvidia-smi &>/dev/null; then
