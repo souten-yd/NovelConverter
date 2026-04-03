@@ -28,5 +28,17 @@ accelerate>=0.30.0
 sentencepiece>=0.2.0
 protobuf>=4.25.0
 
+# ── OCR (image ingestion from ZIP/RAR archives) ───────────────────────────────
+pillow>=10.0.0
+pytesseract>=0.3.10
+
+# ── EPUB parsing ──────────────────────────────────────────────────────────────
+ebooklib>=0.18
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# ── Archive extraction (RAR) ──────────────────────────────────────────────────
+rarfile>=4.1
+
 # ── Process manager ───────────────────────────────────────────────────────────
 supervisor>=4.2.0

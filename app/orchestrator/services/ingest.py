@@ -237,37 +237,98 @@ def extract_epub_text(epub_path: Path) -> tuple[str, list[str]]:
     return "\n\n".join(chunks), warnings
 
 
+def _ocr_with_strategy(image: "Image.Image", lang: str, strategy: str) -> str:  # type: ignore[name-defined]
+    """Apply a preprocessing strategy then run tesseract. Returns stripped text."""
+    import pytesseract
+
+    if strategy == "original":
+        proc = image.convert("RGB")
+    elif strategy == "grayscale":
+        proc = image.convert("L")
+    elif strategy == "binarize_soft":
+        proc = image.convert("L")
+        proc = proc.point(lambda v: 255 if v > 128 else 0)
+    elif strategy == "binarize_hard":
+        proc = image.convert("L")
+        proc = proc.point(lambda v: 255 if v > 160 else 0)
+    elif strategy == "invert":
+        from PIL import ImageOps
+        proc = ImageOps.invert(image.convert("L"))
+    else:
+        proc = image.convert("RGB")
+
+    # Try vertical-then-horizontal for Japanese (jpn_vert has better results for
+    # traditional book layouts); fall back to the requested lang if unavailable.
+    for attempt_lang in ([f"{lang}+jpn_vert", lang] if "jpn" in lang and "vert" not in lang else [lang]):
+        try:
+            text = pytesseract.image_to_string(proc, lang=attempt_lang,
+                                               config="--psm 3")
+            text = text.strip()
+            if text:
+                return text
+        except Exception:
+            continue
+    return ""
+
+
 def extract_image_text(image_path: Path, ocr_lang: str = "jpn+eng") -> tuple[str, list[str]]:
     warnings: list[str] = []
     try:
         from PIL import Image
-    except Exception:
-        return "", ["Pillow not installed"]
+    except ImportError:
+        return "", ["Pillow not installed – pip install pillow"]
     try:
-        import pytesseract
-    except Exception:
-        return "", ["pytesseract not installed"]
+        import pytesseract  # noqa: F401
+    except ImportError:
+        return "", ["pytesseract not installed – pip install pytesseract"]
 
     try:
         image = Image.open(image_path)
-        image = image.convert("RGB").convert("L")
-        image = image.point(lambda v: 255 if v > 160 else 0)
-        text = pytesseract.image_to_string(image, lang=ocr_lang)
-        text = text.strip()
+        # Upscale small images – tesseract accuracy drops below ~200dpi
+        min_dim = 1000
+        w, h = image.size
+        if max(w, h) < min_dim:
+            scale = min_dim / max(w, h)
+            image = image.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
     except Exception as exc:
-        return "", [f"OCR failed: {image_path.name}: {exc}"]
+        return "", [f"Image open failed: {image_path.name}: {exc}"]
 
-    if len(text) < 8:
-        warnings.append(f"OCR near-empty result: {image_path.name}")
+    # Try strategies in order, stop at first non-empty result
+    best_text = ""
+    for strategy in ("grayscale", "original", "binarize_soft", "binarize_hard", "invert"):
+        try:
+            candidate = _ocr_with_strategy(image, ocr_lang, strategy)
+        except Exception as exc:
+            warnings.append(f"OCR strategy '{strategy}' failed: {image_path.name}: {exc}")
+            continue
+        if len(candidate) > len(best_text):
+            best_text = candidate
+        # Stop early once we have a reasonable amount of text
+        if len(best_text) >= 20:
+            break
 
-    wrapped = f"===== OCR: {image_path.name} =====\n{text}" if text else ""
+    if not best_text:
+        warnings.append(f"OCR returned empty result: {image_path.name}")
+        logger.warning(f"OCR empty for {image_path.name} (tried {ocr_lang})")
+    elif len(best_text) < 8:
+        warnings.append(f"OCR near-empty result ({len(best_text)} chars): {image_path.name}")
+        logger.warning(f"OCR near-empty for {image_path.name}: {best_text!r}")
+    else:
+        logger.info(f"OCR ok: {image_path.name} → {len(best_text)} chars")
+
+    wrapped = f"===== OCR: {image_path.name} =====\n{best_text}" if best_text else ""
     return wrapped, warnings
 
 
 def build_combined_text(parts: list[IngestedText]) -> str:
     ordered = sorted(parts, key=lambda p: p.relative_path)
-    body = [p.text.strip() for p in ordered if p.text and p.status == "ok"]
-    return "\n\n".join(x for x in body if x).strip() + "\n"
+    # Prefer fully-ok items; fall back to warning-status items so partial OCR
+    # results are not silently discarded.
+    ok_body = [p.text.strip() for p in ordered if p.text and p.status == "ok"]
+    if ok_body:
+        return "\n\n".join(x for x in ok_body if x).strip() + "\n"
+    warn_body = [p.text.strip() for p in ordered if p.text and p.status not in ("skipped", "error")]
+    return "\n\n".join(x for x in warn_body if x).strip() + "\n"
 
 
 def write_ingest_manifest(project_dir: Path, manifest: dict[str, Any]) -> Path:
