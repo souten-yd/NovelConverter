@@ -118,6 +118,32 @@ def render_page(project_id: str, request: Request, db: Session = Depends(get_db)
     )
 
 
+# ── Mobile UI routes ──────────────────────────────────────────────────────────
+
+@router.get("/m/", response_class=HTMLResponse)
+def mobile_home(request: Request, db: Session = Depends(get_db)):
+    projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    return templates.TemplateResponse(request, "mobile_index.html", {"projects": projects})
+
+
+@router.get("/m/projects/{project_id}", response_class=HTMLResponse)
+def mobile_project_detail(project_id: str, request: Request, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404)
+    seg_count = db.query(Segment).filter(Segment.project_id == project_id).count()
+    sp_count = db.query(Speaker).filter(Speaker.project_id == project_id).count()
+    return templates.TemplateResponse(
+        request, "mobile_project.html",
+        {"project": project, "seg_count": seg_count, "sp_count": sp_count},
+    )
+
+
+@router.get("/m/llm", response_class=HTMLResponse)
+def mobile_llm_page(request: Request):
+    return templates.TemplateResponse(request, "mobile_llm.html", {})
+
+
 @router.get("/artifacts/download/{project_id}/{filename}")
 def download_artifact(project_id: str, filename: str, db: Session = Depends(get_db)):
     artifact_path = get_data_dir() / "outputs" / project_id / filename

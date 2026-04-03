@@ -45,6 +45,12 @@ def preprocess_project(project_id: str, db: Session = Depends(get_db)):
     raw_text = text_path.read_text(encoding="utf-8")
     raw_segments = preprocess(raw_text)
 
+    if not raw_segments:
+        raise HTTPException(
+            status_code=400,
+            detail="テキストからセグメントが生成できませんでした。ファイルの内容を確認してください。",
+        )
+
     # Clear old segments
     db.query(Segment).filter(Segment.project_id == project_id).delete()
 
@@ -66,6 +72,12 @@ def preprocess_project(project_id: str, db: Session = Depends(get_db)):
     db.commit()
     logger.info(f"Preprocessed project {project_id}: {len(raw_segments)} segments")
     return {"project_id": project_id, "segment_count": len(raw_segments)}
+
+
+class RuleSpecIn(BaseModel):
+    rule_id: str
+    enabled: bool = True
+    params: dict = {}
 
 
 class SegmentSpeakersRequest(BaseModel):
@@ -144,12 +156,6 @@ def segment_speakers_endpoint(
 def get_diarization_rules(project_id: str):
     """Return the catalogue of available rules for the diarization studio."""
     return {"rules": AVAILABLE_RULES, "default_order": list(AVAILABLE_RULES.keys())}
-
-
-class RuleSpecIn(BaseModel):
-    rule_id: str
-    enabled: bool = True
-    params: dict = {}
 
 
 class PreviewDiarizationRequest(BaseModel):

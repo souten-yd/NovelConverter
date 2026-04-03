@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>{% block title %}NovelConverter{% endblock %}</title>
+  <link rel="stylesheet" href="/static/mobile.css">
+</head>
+<body>
+  <header class="m-header">
+    <div style="min-width:60px">{% block back_button %}{% endblock %}</div>
+    <h1 class="m-title">{% block page_title %}NovelConverter{% endblock %}</h1>
+    <div style="min-width:60px;display:flex;justify-content:flex-end">{% block header_action %}{% endblock %}</div>
+  </header>
+
+  <main class="m-content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <nav class="m-tab-bar">
+    <a href="/m/" class="m-tab {% block tab_home %}{% endblock %}">
+      <span class="m-tab-icon">📚</span>
+      <span class="m-tab-label">ホーム</span>
+    </a>
+    <a href="/m/llm" class="m-tab {% block tab_llm %}{% endblock %}">
+      <span class="m-tab-icon">🤖</span>
+      <span class="m-tab-label">LLM</span>
+    </a>
+  </nav>
+
+  <script src="/static/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

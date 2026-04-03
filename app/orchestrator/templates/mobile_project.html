@@ -1,0 +1,182 @@
+{% extends "mobile_base.html" %}
+{% block title %}{{ project.name }} – NovelConverter{% endblock %}
+{% block page_title %}{{ project.name[:20] }}{% if project.name|length > 20 %}…{% endif %}{% endblock %}
+{% block tab_home %}active{% endblock %}
+
+{% block back_button %}
+<a href="/m/" class="m-back-btn">‹ 一覧</a>
+{% endblock %}
+
+{% block content %}
+<!-- Stats -->
+<div class="m-stats-row">
+  <div class="m-stat-box">
+    <div class="m-stat-value">{{ seg_count }}</div>
+    <div class="m-stat-label">セグメント</div>
+  </div>
+  <div class="m-stat-box">
+    <div class="m-stat-value">{{ sp_count }}</div>
+    <div class="m-stat-label">話者</div>
+  </div>
+  <div class="m-stat-box" style="display:flex;align-items:center;justify-content:center">
+    <span class="m-badge m-badge-{{ project.status }}">{{ project.status }}</span>
+  </div>
+</div>
+
+<div class="m-step-list">
+
+  <!-- Step 1: Upload -->
+  <div class="m-step-card {{ 'step-done' if project.raw_text_path else 'step-current' }}">
+    <div class="m-step-num">{% if project.raw_text_path %}✓{% else %}1{% endif %}</div>
+    <div class="m-step-body">
+      <div class="m-step-title">原稿アップロード</div>
+      <div class="m-step-desc">
+        {% if project.raw_text_path %}
+          {{ project.uploaded_filename or project.raw_text_path.split('/')[-1] }}
+        {% else %}
+          txt / zip / epub / 画像
+        {% endif %}
+      </div>
+      {% if not project.raw_text_path %}
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <label class="m-btn m-btn-secondary m-file-btn">
+            ファイルを選択
+            <input type="file" id="mTxtFile"
+                   accept=".txt,.zip,.rar,.epub,.png,.jpg,.jpeg,.webp,.bmp">
+          </label>
+          <button class="m-btn m-btn-primary" onclick="mUpload()">アップロード</button>
+        </div>
+        <span id="mUploadStatus" class="m-status-inline"></span>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Step 2: Preprocess -->
+  <div class="m-step-card {{ 'step-done' if project.status in ['preprocessed','segmented','rendering','done'] }}">
+    <div class="m-step-num">{% if project.status in ['preprocessed','segmented','rendering','done'] %}✓{% else %}2{% endif %}</div>
+    <div class="m-step-body">
+      <div class="m-step-title">前処理</div>
+      <div class="m-step-desc">テキストをセグメントに分割します</div>
+      <button class="m-btn m-btn-primary" onclick="mPreprocess()"
+        {% if not project.raw_text_path %}disabled{% endif %}>
+        前処理実行
+      </button>
+      <span id="mPreprocessStatus" class="m-status-inline"></span>
+    </div>
+  </div>
+
+  <!-- Step 3: Speaker segmentation -->
+  <div class="m-step-card {{ 'step-done' if project.status in ['segmented','rendering','done'] }}">
+    <div class="m-step-num">{% if project.status in ['segmented','rendering','done'] %}✓{% else %}3{% endif %}</div>
+    <div class="m-step-body">
+      <div class="m-step-title">話者分割</div>
+      <div class="m-step-desc">ルールベース＋LLMで話者を推定します</div>
+      <button class="m-btn m-btn-primary" onclick="mSegment()"
+        {% if project.status not in ['preprocessed','segmented','rendering','done'] %}disabled{% endif %}>
+        話者分割実行
+      </button>
+      <span id="mSegmentStatus" class="m-status-inline"></span>
+    </div>
+  </div>
+
+  <!-- Step 4: Edit segments (links to desktop) -->
+  <div class="m-step-card">
+    <div class="m-step-num">4</div>
+    <div class="m-step-body">
+      <div class="m-step-title">セグメント確認・修正</div>
+      <div class="m-step-desc">詳細編集はデスクトップ版で行えます</div>
+      <a href="/projects/{{ project.id }}/segments"
+         class="m-btn m-btn-outline {% if seg_count == 0 %}m-btn-disabled{% endif %}"
+         {% if seg_count == 0 %}style="pointer-events:none;opacity:0.45"{% endif %}>
+        セグメント一覧 →
+      </a>
+    </div>
+  </div>
+
+  <!-- Step 5: Voice mapping (links to desktop) -->
+  <div class="m-step-card">
+    <div class="m-step-num">5</div>
+    <div class="m-step-body">
+      <div class="m-step-title">音声設定</div>
+      <div class="m-step-desc">話者ごとの音声を設定します</div>
+      <a href="/projects/{{ project.id }}/voice_mapping"
+         class="m-btn m-btn-outline {% if sp_count == 0 %}m-btn-disabled{% endif %}"
+         {% if sp_count == 0 %}style="pointer-events:none;opacity:0.45"{% endif %}>
+        音声割当を開く →
+      </a>
+    </div>
+  </div>
+
+  <!-- Step 6: Render (links to desktop) -->
+  <div class="m-step-card">
+    <div class="m-step-num">6</div>
+    <div class="m-step-body">
+      <div class="m-step-title">音声生成・結合</div>
+      <div class="m-step-desc">オーディオブックを生成します</div>
+      <a href="/projects/{{ project.id }}/render" class="m-btn m-btn-outline">
+        生成画面を開く →
+      </a>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const projectId = '{{ project.id }}';
+
+async function mUpload() {
+  const file = document.getElementById('mTxtFile').files[0];
+  if (!file) { alert('ファイルを選択してください'); return; }
+  const el = document.getElementById('mUploadStatus');
+  el.textContent = 'アップロード中...';
+  el.className = 'm-status-inline';
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch(`/api/projects/${projectId}/upload_text`, { method: 'POST', body: fd });
+  if (res.ok) {
+    location.reload();
+  } else {
+    const e = await res.json();
+    const detail = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail);
+    el.textContent = '失敗: ' + detail;
+    el.className = 'm-status-inline error';
+  }
+}
+
+async function mPreprocess() {
+  const el = document.getElementById('mPreprocessStatus');
+  el.textContent = '実行中...';
+  el.className = 'm-status-inline';
+  const res = await fetch(`/api/projects/${projectId}/preprocess`, { method: 'POST' });
+  if (res.ok) {
+    const d = await res.json();
+    el.textContent = `完了: ${d.segment_count} セグメント`;
+    setTimeout(() => location.reload(), 1000);
+  } else {
+    const e = await res.json();
+    const detail = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail);
+    el.textContent = '失敗: ' + detail;
+    el.className = 'm-status-inline error';
+  }
+}
+
+async function mSegment() {
+  const el = document.getElementById('mSegmentStatus');
+  el.textContent = '実行中...';
+  el.className = 'm-status-inline';
+  const res = await fetch(`/api/projects/${projectId}/segment_speakers`, { method: 'POST' });
+  if (res.ok) {
+    const d = await res.json();
+    el.textContent = `完了: ${d.speaker_count} 話者`;
+    setTimeout(() => location.reload(), 1000);
+  } else {
+    const e = await res.json();
+    const detail = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail);
+    el.textContent = '失敗: ' + detail;
+    el.className = 'm-status-inline error';
+  }
+}
+</script>
+{% endblock %}

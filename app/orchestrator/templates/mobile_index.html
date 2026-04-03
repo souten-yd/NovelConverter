@@ -1,0 +1,84 @@
+{% extends "mobile_base.html" %}
+{% block title %}プロジェクト – NovelConverter{% endblock %}
+{% block page_title %}プロジェクト一覧{% endblock %}
+{% block tab_home %}active{% endblock %}
+
+{% block content %}
+{% if projects %}
+  {% for p in projects %}
+  <a href="/m/projects/{{ p.id }}" class="m-list-item" style="background:var(--card-bg);border-radius:var(--radius);margin-bottom:10px;display:flex;">
+    <div class="m-list-item-body">
+      <div class="m-list-item-title">{{ p.name }}</div>
+      <div class="m-list-item-subtitle">{{ p.description or "説明なし" }} &nbsp;·&nbsp; {{ p.created_at.strftime('%Y-%m-%d') if p.created_at else '-' }}</div>
+    </div>
+    <div class="m-list-item-right">
+      <span class="m-badge m-badge-{{ p.status }}">{{ p.status }}</span>
+      <span class="m-chevron"></span>
+    </div>
+  </a>
+  {% endfor %}
+{% else %}
+  <div class="m-empty">
+    <div class="m-empty-icon">📚</div>
+    <p>プロジェクトがありません</p>
+    <button class="m-btn m-btn-primary" style="width:auto;padding:12px 28px" onclick="showSheet()">＋ 新規プロジェクト</button>
+  </div>
+{% endif %}
+{% endblock %}
+
+{% block header_action %}
+<button class="m-header-action" onclick="showSheet()" style="background:none;border:none;cursor:pointer">＋</button>
+{% endblock %}
+
+{% block scripts %}
+<!-- Bottom sheet for new project -->
+<div id="createSheet" class="m-sheet-overlay">
+  <div class="m-sheet-overlay" onclick="hideSheet()" style="position:absolute;inset:0;"></div>
+  <div class="m-sheet">
+    <div class="m-sheet-handle"></div>
+    <h2>新規プロジェクト</h2>
+    <div>
+      <label class="m-label">プロジェクト名 <span style="color:var(--error)">*</span></label>
+      <input id="mProjectName" type="text" class="m-input" placeholder="例: 転生したらスライムだった件">
+    </div>
+    <div>
+      <label class="m-label">説明（任意）</label>
+      <input id="mProjectDesc" type="text" class="m-input" placeholder="任意">
+    </div>
+    <div class="m-sheet-actions">
+      <button class="m-btn m-btn-secondary" style="flex:1" onclick="hideSheet()">キャンセル</button>
+      <button class="m-btn m-btn-primary" style="flex:2" onclick="createProject()">作成</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function showSheet() {
+  const s = document.getElementById('createSheet');
+  s.classList.add('open');
+  setTimeout(() => document.getElementById('mProjectName').focus(), 100);
+}
+function hideSheet() {
+  document.getElementById('createSheet').classList.remove('open');
+}
+async function createProject() {
+  const name = document.getElementById('mProjectName').value.trim();
+  const desc = document.getElementById('mProjectDesc').value.trim();
+  if (!name) { alert('プロジェクト名を入力してください'); return; }
+  const res = await fetch('/api/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description: desc }),
+  });
+  if (res.ok) {
+    const p = await res.json();
+    window.location.href = `/m/projects/${p.id}`;
+  } else {
+    alert('作成に失敗しました');
+  }
+}
+document.getElementById('mProjectName').addEventListener('keydown', e => {
+  if (e.key === 'Enter') createProject();
+});
+</script>
+{% endblock %}
