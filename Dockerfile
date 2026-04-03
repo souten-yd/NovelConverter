@@ -55,7 +55,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     git \
-    jq \
     tar \
     ffmpeg \
     libsndfile1 \
@@ -71,22 +70,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ── llama.cpp server binary (prebuilt CUDA artifact) ─────────────────────────
 RUN set -eux; \
-    release_json="/tmp/llama_release.json"; \
-    asset_regex='^llama\.cpp-b[0-9]+-cuda-12\.1\.tar\.gz$'; \
-    curl -fsSL "https://api.github.com/repos/ai-dock/llama.cpp-cuda/releases/latest" -o "${release_json}"; \
-    asset_url="$(jq -r --arg re "${asset_regex}" '.assets[] | select(.name | test($re)) | .browser_download_url' "${release_json}" | head -n1)"; \
-    asset_name="$(jq -r --arg re "${asset_regex}" '.assets[] | select(.name | test($re)) | .name' "${release_json}" | head -n1)"; \
-    test -n "${asset_url}"; \
-    test "${asset_url}" != "null"; \
-    curl -fL "${asset_url}" -o "/tmp/${asset_name}"; \
-    mkdir -p /tmp/llama_extract /opt/llama-cpp/bin /opt/llama-cpp/lib; \
-    tar -xzf "/tmp/${asset_name}" -C /tmp/llama_extract; \
-    source_root="$(dirname "$(find /tmp/llama_extract -type f -name llama-server -perm -u+x | head -n1)")"; \
+    archive_url="https://github.com/ai-dock/llama.cpp-cuda/releases/download/b8642/llama.cpp-b8642-cuda-12.8.tar.gz"; \
+    archive_path="/tmp/llama.cpp-b8642-cuda-12.8.tar.gz"; \
+    extract_dir="/tmp/llama-prebuilt"; \
+    curl -fL "${archive_url}" -o "${archive_path}"; \
+    mkdir -p "${extract_dir}" /opt/llama-cpp/bin /opt/llama-cpp/lib; \
+    tar -xzf "${archive_path}" -C "${extract_dir}"; \
+    source_root="$(dirname "$(find "${extract_dir}" -type f -name llama-server -perm -u+x | head -n1)")"; \
     test -n "${source_root}"; \
     cp -a "${source_root}/llama-server" /opt/llama-cpp/bin/llama-server; \
     if [ -f "${source_root}/llama-cli" ]; then cp -a "${source_root}/llama-cli" /opt/llama-cpp/bin/llama-cli; fi; \
     find "${source_root}" \( -type f -o -type l \) -name '*.so*' -exec cp -a {} /opt/llama-cpp/lib/ \;; \
-    rm -rf /tmp/llama_extract "${release_json}" "/tmp/${asset_name}"
+    chmod +x /opt/llama-cpp/bin/llama-server; \
+    /opt/llama-cpp/bin/llama-server --version || /opt/llama-cpp/bin/llama-server --help >/dev/null; \
+    rm -rf "${extract_dir}" "${archive_path}"
 
 # Make python3.11 the default python3
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 \
