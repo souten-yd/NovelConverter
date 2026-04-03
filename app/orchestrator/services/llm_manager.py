@@ -77,6 +77,7 @@ def _llama_server_candidates() -> List[str]:
         "./llama-server",
         "./build/bin/llama-server",
         "./llama.cpp/build/bin/llama-server",
+        "/opt/llama-cpp/bin/llama-server",
     ]
 
 
