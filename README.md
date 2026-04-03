@@ -203,7 +203,9 @@ export LLM_API_KEY=                             # API Key（不要な場合は�
 export LLAMA_SERVER_BIN=/path/to/llama-server
 ```
 
-Docker イメージでは起動時点で `/opt/llama-cpp/bin/llama-server` が利用可能になるため、通常は追加設定不要です。
+Docker Publish (GitHub Actions) のビルド時に `ai-dock/llama.cpp-cuda` の最新 CUDA 12.1 アーティファクトを取得して `/opt/llama-cpp/bin/llama-server` を同梱します。
+
+さらに RunPod 起動後に万一 `llama-server` が見つからない場合、エントリポイントが起動ログで警告を表示し、`/opt/llama-cpp/bin/llama-server` へのランタイムフォールバックダウンロードを自動で試行します（失敗時はルールベースのみ継続）。
 
 ---
 

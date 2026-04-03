@@ -7,7 +7,7 @@ FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 # ── Build args ────────────────────────────────────────────────────────────────
 ARG PYTHON_VERSION=3.11
-ARG APP_DIR=/app
+ARG APP_DIR=/workspace/NovelConverter
 ARG DATA_DIR=/workspace/data
 
 # ── Environment ───────────────────────────────────────────────────────────────
