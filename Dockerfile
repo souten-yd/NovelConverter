@@ -76,13 +76,24 @@ RUN set -eux; \
     curl -fL "${archive_url}" -o "${archive_path}"; \
     mkdir -p "${extract_dir}" /opt/llama-cpp/bin /opt/llama-cpp/lib; \
     tar -xzf "${archive_path}" -C "${extract_dir}"; \
-    source_root="$(dirname "$(find "${extract_dir}" -type f -name llama-server -perm -u+x | head -n1)")"; \
-    test -n "${source_root}"; \
+    echo "=== extracted files (maxdepth 4) ==="; \
+    find "${extract_dir}" -maxdepth 4 -type f | sort; \
+    echo "=== searching for llama-server ==="; \
+    llama_path="$(find "${extract_dir}" -type f -name 'llama-server' | head -n1)"; \
+    if [ -z "${llama_path}" ]; then \
+      echo "ERROR: llama-server not found in extracted archive"; \
+      find "${extract_dir}" -maxdepth 6 | sort; \
+      exit 1; \
+    fi; \
+    source_root="$(dirname "${llama_path}")"; \
+    echo "llama_path=${llama_path}"; \
+    echo "source_root=${source_root}"; \
+    test -f "${source_root}/llama-server"; \
     cp -a "${source_root}/llama-server" /opt/llama-cpp/bin/llama-server; \
     if [ -f "${source_root}/llama-cli" ]; then cp -a "${source_root}/llama-cli" /opt/llama-cpp/bin/llama-cli; fi; \
-    find "${source_root}" \( -type f -o -type l \) -name '*.so*' -exec cp -a {} /opt/llama-cpp/lib/ \;; \
+    find "${source_root}" \( -type f -o -type l \) -name '*.so*' -exec cp -a {} /opt/llama-cpp/lib/ \; || true; \
     chmod +x /opt/llama-cpp/bin/llama-server; \
-    /opt/llama-cpp/bin/llama-server --version || /opt/llama-cpp/bin/llama-server --help >/dev/null; \
+    /opt/llama-cpp/bin/llama-server --help >/dev/null; \
     rm -rf "${extract_dir}" "${archive_path}"
 
 # Make python3.11 the default python3
