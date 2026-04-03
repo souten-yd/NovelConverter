@@ -47,6 +47,7 @@ def get_status():
         "port": state.port,
         "pid": state.pid,
         "error": state.error,
+        "stderr": state.stderr,
         "binary_available": llm_manager.check_binary_available(),
     }
 
@@ -96,6 +97,7 @@ def load_model(body: LoadRequest):
         "model_filename": state.model_filename,
         "port": state.port,
         "error": state.error,
+        "stderr": state.stderr,
     }
 
 

@@ -1,9 +1,9 @@
 # =============================================================================
 # NovelConverter – RunPod / NVIDIA GPU Docker Image
-# Base: Ubuntu 22.04 + CUDA 12.1 + cuDNN 8
+# Base: Ubuntu 22.04 + CUDA 12.8 + cuDNN
 # All services run in a single container managed by supervisord
 # =============================================================================
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
 # ── Build args ────────────────────────────────────────────────────────────────
 ARG PYTHON_VERSION=3.11
