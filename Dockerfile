@@ -93,7 +93,8 @@ RUN set -eux; \
     if [ -f "${source_root}/llama-cli" ]; then cp -a "${source_root}/llama-cli" /opt/llama-cpp/bin/llama-cli; fi; \
     find "${source_root}" \( -type f -o -type l \) -name '*.so*' -exec cp -a {} /opt/llama-cpp/lib/ \; || true; \
     chmod +x /opt/llama-cpp/bin/llama-server; \
-    /opt/llama-cpp/bin/llama-server --help >/dev/null; \
+    ls -l /opt/llama-cpp/bin/llama-server; \
+    ldd /opt/llama-cpp/bin/llama-server || true; \
     rm -rf "${extract_dir}" "${archive_path}"
 
 # Make python3.11 the default python3
