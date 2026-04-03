@@ -195,6 +195,16 @@ export LLM_API_KEY=                             # API Key（不要な場合は�
 
 未設定の場合はルールベースのみで動作します。
 
+### llama-server が見つからない場合
+
+`llama-server binary not found at 'llama-server'` が出る場合は、`llama.cpp` の `llama-server` 実行ファイルを配置し、環境変数を設定してください。
+
+```bash
+export LLAMA_SERVER_BIN=/path/to/llama-server
+```
+
+Docker イメージでは起動時点で `/opt/llama-cpp/bin/llama-server` が利用可能になるため、通常は追加設定不要です。
+
 ---
 
 ## ディレクトリ構成

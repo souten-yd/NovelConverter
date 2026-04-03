@@ -24,3 +24,9 @@ def test_resolve_llama_server_bin_prefers_llama_server_bin_env(monkeypatch):
 
     resolved = llm_manager._resolve_llama_server_bin()
     assert resolved == "/opt/custom/llama-server"
+
+
+def test_llama_server_candidates_include_docker_prebuilt_path(monkeypatch):
+    monkeypatch.delenv("LLAMA_SERVER_BIN", raising=False)
+    candidates = llm_manager._llama_server_candidates()
+    assert "/opt/llama-cpp/bin/llama-server" in candidates
