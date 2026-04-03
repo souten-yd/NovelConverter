@@ -118,6 +118,12 @@ fi
 if command -v tesseract >/dev/null 2>&1; then
     echo "[entrypoint] tesseract: $(command -v tesseract)"
     tesseract --version | head -n1 || true
+    # List available language packs – warn if Japanese is missing
+    tess_langs="$(tesseract --list-langs 2>&1 | tr '\n' ' ')"
+    echo "[entrypoint] tesseract languages: ${tess_langs}"
+    if ! echo "${tess_langs}" | grep -q "jpn"; then
+        echo "[entrypoint] WARNING: tesseract Japanese language data (jpn) not found – OCR quality will be poor"
+    fi
 else
     echo "[entrypoint] WARNING: tesseract not found (OCR unavailable)"
 fi
@@ -127,6 +133,30 @@ if command -v unrar >/dev/null 2>&1 || command -v 7z >/dev/null 2>&1 || command 
 else
     echo "[entrypoint] WARNING: no RAR backend command found (unrar/7z/bsdtar)"
 fi
+
+# ── Python package diagnostics ───────────────────────────────────────────────
+echo "[entrypoint] Python package diagnostics:"
+python3 - <<'PYCHECK'
+import sys
+checks = {
+    "PIL (Pillow)":     "PIL",
+    "pytesseract":      "pytesseract",
+    "rarfile":          "rarfile",
+    "ebooklib":         "ebooklib",
+    "bs4 (BeautifulSoup)": "bs4",
+}
+all_ok = True
+for label, mod in checks.items():
+    try:
+        __import__(mod)
+        print(f"  [ok]      {label}")
+    except ImportError:
+        print(f"  [MISSING] {label}  ← pip install {mod.lower()}", file=sys.stderr)
+        all_ok = False
+if not all_ok:
+    print("  WARNING: Some optional packages missing – archive/OCR/EPUB features may be unavailable",
+          file=sys.stderr)
+PYCHECK
 
 if [[ -x "${LLAMA_SERVER_BIN:-}" ]]; then
     echo "[entrypoint] ldd ${LLAMA_SERVER_BIN}:"
