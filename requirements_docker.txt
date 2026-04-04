@@ -32,6 +32,10 @@ protobuf>=4.25.0
 pillow>=10.0.0
 pytesseract>=0.3.10
 
+# ── Optional OCR engines (uncomment to enable) ───────────────────────────────
+# paddleocr>=2.7.0    # PaddleOCR (also needs paddlepaddle-gpu)
+# ndlocr-cli           # NDLOCR-Lite
+
 # ── EPUB parsing ──────────────────────────────────────────────────────────────
 ebooklib>=0.18
 beautifulsoup4>=4.12.0

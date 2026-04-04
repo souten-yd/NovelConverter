@@ -19,6 +19,7 @@ class ProjectOut(BaseModel):
     description: str
     status: str
     raw_text_path: Optional[str]
+    ocr_engine: str = "tesseract"
     created_at: datetime
     updated_at: datetime
 

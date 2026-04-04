@@ -54,6 +54,38 @@ def health():
     return {"status": "ok", "service": "orchestrator"}
 
 
+@app.get("/api/ocr/engines")
+def list_ocr_engines():
+    """List available OCR engines with their status."""
+    from app.orchestrator.services.ocr.factory import list_engines
+    return list_engines()
+
+
+@app.get("/api/health/dependencies")
+def check_dependencies():
+    """Check availability of all optional dependencies."""
+    from app.orchestrator.services.ocr.factory import list_engines
+
+    ocr_engines = list_engines()
+
+    # Check archive dependencies
+    archive_deps = {}
+    try:
+        import rarfile  # noqa: F401
+        archive_deps["rarfile"] = {"available": True}
+    except ImportError:
+        archive_deps["rarfile"] = {"available": False, "install": "pip install rarfile"}
+
+    import shutil
+    for cmd in ["unrar", "7z", "bsdtar"]:
+        archive_deps[cmd] = {"available": shutil.which(cmd) is not None}
+
+    return {
+        "ocr_engines": ocr_engines,
+        "archive": archive_deps,
+    }
+
+
 @app.get("/api/status")
 def full_status() -> Dict[str, Any]:
     """Aggregate health check for orchestrator + all TTS workers.

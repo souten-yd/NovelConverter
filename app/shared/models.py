@@ -33,6 +33,7 @@ class Project(Base):
     status = Column(String, default="created")  # created/preprocessing/segmented/rendering/done/error
     raw_text_path = Column(String, nullable=True)
     uploaded_filename = Column(String, nullable=True)
+    ocr_engine = Column(String, default="tesseract")  # tesseract/paddleocr/qwen_vl/ndlocr_lite
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
@@ -40,6 +41,7 @@ class Project(Base):
     speakers = relationship("Speaker", back_populates="project", cascade="all, delete-orphan")
     render_jobs = relationship("RenderJob", back_populates="project", cascade="all, delete-orphan")
     artifacts = relationship("Artifact", back_populates="project", cascade="all, delete-orphan")
+    processing_jobs = relationship("ProcessingJob", back_populates="project", cascade="all, delete-orphan")
 
 
 class Segment(Base):
@@ -139,3 +141,28 @@ class Artifact(Base):
     created_at = Column(DateTime, default=func.now())
 
     project = relationship("Project", back_populates="artifacts")
+
+
+class ProcessingJob(Base):
+    """Generic job tracker for long-running operations (ingest, speaker segmentation, etc.)."""
+    __tablename__ = "processing_jobs"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False)
+    job_type = Column(String, nullable=False)  # ingest / speaker_segmentation
+    status = Column(String, default="queued")  # queued/running/completed/failed
+    stage = Column(String, default="")
+    stage_label = Column(String, default="")
+    progress_pct = Column(Integer, default=0)
+    current_count = Column(Integer, default=0)
+    total_count = Column(Integer, default=0)
+    warnings = Column(JSON, default=list)
+    error_message = Column(Text, nullable=True)
+    error_category = Column(String, nullable=True)  # timeout/extraction/ocr/network/llm/unknown
+    result_data = Column(JSON, default=dict)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    project = relationship("Project", back_populates="processing_jobs")
