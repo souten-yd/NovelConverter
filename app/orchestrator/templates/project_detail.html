@@ -24,7 +24,7 @@
   <div class="step-card {{ 'step-done' if project.raw_text_path else 'step-current' }}">
     <div class="step-num">1</div>
     <div class="step-body">
-      <h3>原稿アップロード（txt / zip / rar / epub / 画像）</h3>
+      <h3>原稿アップロー���（txt / zip / rar / epub / 画像）</h3>
       {% if project.raw_text_path %}
         <p class="text-success">✓ アップロード済み</p>
         <p class="text-small">{{ project.uploaded_filename or project.raw_text_path.split('/')[-1] }}</p>
@@ -40,10 +40,25 @@
         </div>
       {% else %}
         <form id="uploadForm" enctype="multipart/form-data">
-          <input type="file" id="txtFile" accept=".txt,.zip,.rar,.epub,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.tif,application/x-rar-compressed,application/vnd.rar" class="input">
-          <button type="button" class="btn btn-primary" onclick="uploadText()" id="btnUpload" style="margin-top:8px">アップロード</button>
+          <!-- OCR engine selector -->
+          <div style="margin-bottom:8px">
+            <label style="font-size:0.85em;font-weight:600;display:block;margin-bottom:4px">OCRエンジン:</label>
+            <select id="ocrEngineSelect" class="input" style="max-width:300px">
+              <option value="tesseract" {{ 'selected' if project.ocr_engine == 'tesseract' }}>Tesseract (軽量・導入容易)</option>
+              <option value="paddleocr" {{ 'selected' if project.ocr_engine == 'paddleocr' }}>PaddleOCR (汎用高精度)</option>
+              <option value="qwen_vl" {{ 'selected' if project.ocr_engine == 'qwen_vl' }}>Qwen-VL (視覚LLMベース)</option>
+              <option value="ndlocr_lite" {{ 'selected' if project.ocr_engine == 'ndlocr_lite' }}>NDLOCR-Lite (日本語文書向け)</option>
+            </select>
+            <span id="ocrEngineStatus" style="font-size:0.78em;color:#64748b;margin-left:6px"></span>
+          </div>
+          <input type="file" id="txtFile" accept=".txt,.zip,.rar,.epub,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.tif,application/x-rar-compressed,application/vnd.rar,application/zip,application/epub+zip" class="input">
+          <div style="font-size:0.75em;color:#64748b;margin-top:2px">
+            対応形式: txt, zip, rar, epub, 画像 (png/jpg/webp/bmp/tiff)
+            <br>※ iOSではRAR形式が選択できない場合があります。ZIP形式を推奨し���す。
+          </div>
+          <button type="button" class="btn btn-primary" onclick="uploadText()" id="btnUpload" style="margin-top:8px">ア���プロード</button>
         </form>
-        <!-- Progress UI (hidden initially) -->
+        <!-- Progress UI (hidden initially, also shown on reload recovery) -->
         <div id="uploadProgress" style="display:none;margin-top:12px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
             <span id="uploadStageLabel" style="font-size:0.9em;font-weight:600">準備中...</span>
@@ -120,43 +135,95 @@
 <script>
 const projectId = '{{ project.id }}';
 
+// ── Error message mapping ───────────────────────────────────────────────────
+const ERROR_LABELS = {
+  timeout: 'タイムアウト: 処理時間が長すぎます。ファイルサイズを確認してください。',
+  extraction: 'アーカイブ展開失敗: ZIP/RAR形式が壊れているか、対応外の形式です。',
+  ocr: 'OCR処理失敗: OCRエンジンまたは依存関係を確認してください。',
+  encoding: 'エンコーディングエラー: ファイルの文字コードを確認してください。',
+  filesystem: 'ファイルシステムエラー: ディスク容量や権限を確認してください。',
+  network: 'ネットワークエラー: 接続を確認して再試行してください。',
+  llm: 'LLM処理エラー: LLMサーバーの状態を確認してください。',
+  database: 'データベースエラー: サーバー側の問題です。',
+  unknown: '予期しないエラーが発生しました。',
+};
+
+function _friendlyError(category, message) {
+  const label = ERROR_LABELS[category] || ERROR_LABELS.unknown;
+  return label + (message ? '\n詳細: ' + message : '');
+}
+
+// ── Upload ──────────────────────────────────────────────────────────────────
 async function uploadText() {
   const file = document.getElementById('txtFile').files[0];
   if (!file) { alert('ファイルを選択してください'); return; }
 
-  // Show progress UI
   const btn = document.getElementById('btnUpload');
   btn.disabled = true;
   document.getElementById('uploadProgress').style.display = 'block';
-  _setUploadStage('アップロード中...', 2);
+  _setUploadStage('ファイル送信中...', 0);
 
   const fd = new FormData();
   fd.append('file', file);
 
-  let uploadId = null;
-  try {
-    const res = await fetch(`/api/projects/${projectId}/upload_text`, { method: 'POST', body: fd });
-    if (!res.ok) {
-      const e = await res.json().catch(() => ({}));
-      const detail = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail || e);
-      _setUploadStage('失敗: ' + detail, 0, true);
-      btn.disabled = false;
-      return;
-    }
-    const data = await res.json();
-    uploadId = data.upload_id;
+  // Save OCR engine selection
+  const engineSelect = document.getElementById('ocrEngineSelect');
+  if (engineSelect) {
+    await fetch(`/api/projects/${projectId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ocr_engine: engineSelect.value}),
+    }).catch(() => {});
+  }
 
-    // The request already completed synchronously on the server.
-    // Show a brief "complete" state then reload.
-    _setUploadStage('完了！', 100);
-    setTimeout(() => location.reload(), 800);
+  try {
+    const uploadData = await _uploadWithProgress(fd);
+    // Server returns immediately — subscribe to SSE for processing progress
+    _setUploadStage('サーバー処理開始...', 5);
+    _watchUploadProgress(uploadData.upload_id);
   } catch(err) {
-    _setUploadStage('エラー: ' + err.message, 0, true);
+    const msg = err.message || String(err);
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+      _setUploadStage('ネットワークエラー: 接続を確認して再試行してください。', 0, true);
+    } else {
+      _setUploadStage('エラー: ' + msg, 0, true);
+    }
     btn.disabled = false;
   }
 }
 
-// Subscribe to SSE progress (called before or after upload depending on timing)
+function _uploadWithProgress(fd) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/projects/${projectId}/upload_text`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const transferPct = Math.round((e.loaded / e.total) * 100);
+        _setUploadStage('ファイル送信中... (' + transferPct + '%)', Math.min(Math.round(transferPct * 0.05), 5));
+      }
+    };
+    xhr.onload = () => {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(data);
+        } else {
+          const detail = data.detail || JSON.stringify(data);
+          _setUploadStage('失敗: ' + detail, 0, true);
+          const btn = document.getElementById('btnUpload');
+          if (btn) btn.disabled = false;
+          reject(new Error(detail));
+        }
+      } catch(e) { reject(new Error('レスポンス解析エラー')); }
+    };
+    xhr.onerror = () => reject(new Error('ネットワークエラー'));
+    xhr.ontimeout = () => reject(new Error('送信タイムアウト'));
+    xhr.timeout = 120000;
+    xhr.send(fd);
+  });
+}
+
+// ── SSE progress subscription ───────────────────────────────────────────────
 function _watchUploadProgress(uploadId) {
   if (!uploadId || !window.EventSource) return;
   const es = new EventSource(`/api/projects/${projectId}/upload/progress?upload_id=${encodeURIComponent(uploadId)}`);
@@ -164,15 +231,19 @@ function _watchUploadProgress(uploadId) {
     try {
       const d = JSON.parse(ev.data);
       const isError = d.status === 'failed';
-      _setUploadStage(d.stage_label || d.stage, d.pct || 0, isError);
+      if (isError && d.error) {
+        _setUploadStage('失敗: ' + d.error, 0, true);
+      } else {
+        _setUploadStage(d.stage_label || d.stage, d.pct || 0, isError);
+      }
       if (d.page && d.total_pages) {
         const info = document.getElementById('uploadPageInfo');
-        if (info) info.textContent = `ページ: ${d.page} / ${d.total_pages}`;
+        if (info) info.textContent = 'ページ: ' + d.page + ' / ' + d.total_pages;
       }
       if (d.warnings && d.warnings.length) {
         const wEl = document.getElementById('uploadWarnings');
         if (wEl) wEl.innerHTML = d.warnings.map(w =>
-          `<div style="font-size:0.78em;color:#92400e;background:#fef3c7;padding:3px 6px;border-radius:4px;margin-top:2px">⚠ ${escHtmlDetail(w)}</div>`
+          '<div style="font-size:0.78em;color:#92400e;background:#fef3c7;padding:3px 6px;border-radius:4px;margin-top:2px">' + escHtml(w) + '</div>'
         ).join('');
       }
       if (d.status === 'complete' || d.status === 'failed') {
@@ -181,9 +252,86 @@ function _watchUploadProgress(uploadId) {
       }
     } catch(_) {}
   };
-  es.onerror = () => es.close();
+  es.onerror = () => { es.close(); _pollJobStatus('ingest'); };
 }
 
+// ── Job polling (fallback / reload recovery) ────────────────────────────────
+function _pollJobStatus(jobType) {
+  const interval = setInterval(async () => {
+    try {
+      const res = await fetch('/api/projects/' + projectId + '/jobs?status=running');
+      if (!res.ok) { clearInterval(interval); return; }
+      const jobs = await res.json();
+      const job = jobs.find(j => j.job_type === jobType);
+      if (!job) {
+        clearInterval(interval);
+        // Check if completed recently
+        const res2 = await fetch('/api/projects/' + projectId + '/jobs');
+        if (!res2.ok) return;
+        const allJobs = await res2.json();
+        const recent = allJobs.find(j => j.job_type === jobType);
+        if (recent && recent.status === 'completed') {
+          if (jobType === 'ingest') { _setUploadStage('完了！', 100); }
+          else if (jobType === 'speaker_segmentation') {
+            const el = document.getElementById('segmentStatus');
+            if (el) { el.textContent = '完了！'; el.style.color = ''; }
+          }
+          setTimeout(() => location.reload(), 600);
+        } else if (recent && recent.status === 'failed') {
+          const errMsg = _friendlyError(recent.error_category, recent.error_message);
+          if (jobType === 'ingest') { _setUploadStage(errMsg, 0, true); }
+          else {
+            const el = document.getElementById('segmentStatus');
+            if (el) { el.textContent = errMsg; el.style.color = 'red'; }
+          }
+        }
+        return;
+      }
+      if (jobType === 'ingest') {
+        _setUploadStage(job.stage_label || job.stage, job.progress_pct || 0);
+        if (job.current_count && job.total_count) {
+          const info = document.getElementById('uploadPageInfo');
+          if (info) info.textContent = 'ページ: ' + job.current_count + ' / ' + job.total_count;
+        }
+      } else if (jobType === 'speaker_segmentation') {
+        const el = document.getElementById('segmentStatus');
+        if (el) { el.textContent = (job.stage_label || job.stage) + ' (' + job.progress_pct + '%)'; el.style.color = ''; }
+      }
+    } catch(e) { console.warn('[pollJobStatus]', e); }
+  }, 1500);
+}
+
+// ── Reload recovery ─────────────────────────────────────────────────────────
+(async function checkActiveJobs() {
+  try {
+    const res = await fetch('/api/projects/' + projectId + '/jobs?status=running');
+    if (!res.ok) return;
+    const jobs = await res.json();
+    const ingestJob = jobs.find(j => j.job_type === 'ingest');
+    if (ingestJob) {
+      const progressEl = document.getElementById('uploadProgress');
+      if (progressEl) {
+        progressEl.style.display = 'block';
+        _setUploadStage(ingestJob.stage_label || '処理継続中...', ingestJob.progress_pct || 0);
+        if (ingestJob.current_count && ingestJob.total_count) {
+          const info = document.getElementById('uploadPageInfo');
+          if (info) info.textContent = 'ページ: ' + ingestJob.current_count + ' / ' + ingestJob.total_count;
+        }
+      }
+      const btn = document.getElementById('btnUpload');
+      if (btn) btn.disabled = true;
+      _pollJobStatus('ingest');
+    }
+    const segJob = jobs.find(j => j.job_type === 'speaker_segmentation');
+    if (segJob) {
+      const el = document.getElementById('segmentStatus');
+      if (el) { el.textContent = (segJob.stage_label || '処理継続中...') + ' (' + segJob.progress_pct + '%)'; }
+      _pollJobStatus('speaker_segmentation');
+    }
+  } catch(e) {}
+})();
+
+// ── UI helpers ──────────────────────────────────────────────────────────────
 function _setUploadStage(label, pct, isError) {
   const stageEl = document.getElementById('uploadStageLabel');
   const pctEl = document.getElementById('uploadPct');
@@ -193,49 +341,118 @@ function _setUploadStage(label, pct, isError) {
   if (bar) { bar.style.width = pct + '%'; bar.style.background = isError ? '#ef4444' : '#4f6ef7'; }
 }
 
-function escHtmlDetail(str) {
+function escHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// ── OCR engine availability check ───────────────────────────────────────────
+(async function checkOcrEngines() {
+  try {
+    const res = await fetch('/api/ocr/engines');
+    if (!res.ok) return;
+    const engines = await res.json();
+    const select = document.getElementById('ocrEngineSelect');
+    const statusEl = document.getElementById('ocrEngineStatus');
+    if (!select) return;
+    for (const opt of select.options) {
+      const eng = engines.find(e => e.id === opt.value);
+      if (eng && !eng.available) {
+        opt.textContent += ' [未導入]';
+        opt.disabled = true;
+      }
+    }
+    select.addEventListener('change', () => {
+      const eng = engines.find(e => e.id === select.value);
+      if (statusEl && eng) {
+        statusEl.textContent = eng.available ? '利用可能' : ('未導入: ' + (eng.missing_deps || ''));
+        statusEl.style.color = eng.available ? '#16a34a' : '#dc2626';
+      }
+    });
+    select.dispatchEvent(new Event('change'));
+  } catch(e) {}
+})();
+
+// ── Preprocess ──────────────────────────────────────────────────────────────
 async function runPreprocess() {
   const el = document.getElementById('preprocessStatus');
   el.textContent = '実行中...';
-  const res = await fetch(`/api/projects/${projectId}/preprocess`, { method: 'POST' });
-  if (res.ok) {
-    const d = await res.json();
-    el.textContent = `完了: ${d.segment_count} セグメント`;
-    setTimeout(() => location.reload(), 800);
-  } else {
-    const e = await res.json();
-    el.textContent = '失敗: ' + JSON.stringify(e.detail);
+  el.style.color = '';
+  try {
+    const res = await fetch('/api/projects/' + projectId + '/preprocess', { method: 'POST' });
+    if (res.ok) {
+      const d = await res.json();
+      el.textContent = '完了: ' + d.segment_count + ' セグメント';
+      setTimeout(() => location.reload(), 800);
+    } else {
+      const e = await res.json().catch(() => ({}));
+      el.textContent = '失敗: ' + (typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail || e));
+      el.style.color = 'red';
+    }
+  } catch(err) {
+    el.textContent = 'エラー: ' + err.message;
     el.style.color = 'red';
   }
 }
 
+// ── Speaker segmentation (async job-based) ──────────────────────────────────
 async function runSegment() {
   const el = document.getElementById('segmentStatus');
-  el.textContent = '実行中...';
+  el.textContent = '開始中...';
   el.style.color = '';
   try {
-    const res = await fetch(`/api/projects/${projectId}/segment_speakers`, { method: 'POST' });
+    const res = await fetch('/api/projects/' + projectId + '/segment_speakers', { method: 'POST' });
     const d = await res.json().catch(() => ({}));
     if (res.ok) {
-      const errCount = d.llm_error_count || 0;
-      el.textContent = `完了: ${d.speaker_count} 話者${errCount > 0 ? ` (LLMエラー: ${errCount}件 – 分割スタジオで詳細確認できます)` : ''}`;
-      el.style.color = errCount > 0 ? '#c05621' : '';
-      setTimeout(() => location.reload(), 1200);
+      if (d.job_id) {
+        el.textContent = 'ルールベース分類開始...';
+        _pollSegmentJob(d.job_id);
+      } else {
+        const errCount = d.llm_error_count || 0;
+        el.textContent = '完了: ' + d.speaker_count + ' 話者' + (errCount > 0 ? ' (LLMエラー: ' + errCount + '件)' : '');
+        el.style.color = errCount > 0 ? '#c05621' : '';
+        setTimeout(() => location.reload(), 1200);
+      }
     } else {
-      const detail = d.detail
-        ? (typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail))
-        : JSON.stringify(d);
-      el.textContent = '失敗: ' + detail;
+      el.textContent = '失敗: ' + (typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail || d));
       el.style.color = 'red';
     }
   } catch(err) {
-    el.textContent = 'エラー: ' + err.message + ' (ネットワーク障害またはサーバーエラー)';
+    if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+      el.textContent = 'ネットワークエラー。処理はサーバーで継続中の可能性があります。';
+    } else {
+      el.textContent = 'エラー: ' + err.message;
+    }
     el.style.color = 'red';
-    console.error('[runSegment] unexpected error:', err);
+    _pollJobStatus('speaker_segmentation');
   }
+}
+
+function _pollSegmentJob(jobId) {
+  const el = document.getElementById('segmentStatus');
+  const interval = setInterval(async () => {
+    try {
+      const res = await fetch('/api/projects/' + projectId + '/jobs/' + jobId);
+      if (!res.ok) { clearInterval(interval); return; }
+      const job = await res.json();
+      if (job.status === 'running') {
+        let label = job.stage_label || job.stage || '処理中';
+        if (job.current_count && job.total_count) label += ' (' + job.current_count + '/' + job.total_count + ')';
+        if (el) { el.textContent = label; el.style.color = ''; }
+      } else if (job.status === 'completed') {
+        clearInterval(interval);
+        const rd = job.result_data || {};
+        const errCount = rd.llm_error_count || 0;
+        if (el) {
+          el.textContent = '完了: ' + (rd.speaker_count || '?') + ' 話者' + (errCount > 0 ? ' (LLMエラー: ' + errCount + '件)' : '');
+          el.style.color = errCount > 0 ? '#c05621' : '';
+        }
+        setTimeout(() => location.reload(), 800);
+      } else if (job.status === 'failed') {
+        clearInterval(interval);
+        if (el) { el.textContent = _friendlyError(job.error_category, job.error_message); el.style.color = 'red'; }
+      }
+    } catch(e) { console.warn('[pollSegmentJob]', e); }
+  }, 1500);
 }
 </script>
 {% endblock %}

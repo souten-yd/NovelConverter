@@ -337,6 +337,7 @@ BATCH_SIZE = 20
 def segment_speakers(
     raw_segments: List[RawSegment],
     config: Optional[DiarizationConfig] = None,
+    progress_cb: Optional[object] = None,  # callable(stage, pct, current, total) or None
 ) -> tuple[List[AnnotatedSegment], List[dict]]:
     """Full pipeline: rule-based → LLM refinement.
 
@@ -345,7 +346,21 @@ def segment_speakers(
 
     ``config`` is optional. When omitted the full default pipeline runs,
     which is equivalent to all rules enabled – matching original behaviour.
+
+    ``progress_cb`` is an optional callback for reporting progress to the job tracker.
     """
+    import time as _time
+
+    def _cb(stage: str, pct: int, cur: int = 0, total: int = 0) -> None:
+        if progress_cb is not None:
+            try:
+                progress_cb(stage, pct, cur, total)
+            except Exception:
+                pass
+
+    total_segs = len(raw_segments)
+    _cb("rule_based", 10, 0, total_segs)
+
     annotated = rule_based_pass(raw_segments, config=config)
     llm_errors: List[dict] = []
 
@@ -356,7 +371,9 @@ def segment_speakers(
 
     if not run_llm:
         logger.info("LLM refinement disabled – using rule-based only")
+        _cb("speaker_propagation", 85, 0, total_segs)
         _maybe_apply_propagation(annotated, config)
+        _cb("complete", 100, total_segs, total_segs)
         return annotated, llm_errors
 
     llm_spec = config.get_rule("llm_refinement") if config else None
@@ -368,14 +385,31 @@ def segment_speakers(
         s for s in annotated
         if not s.is_chapter_header and (s.confidence < conf_threshold or s.predicted_speaker == "unknown")
     ]
-    logger.info(f"LLM refinement for {len(targets)} segments (threshold={conf_threshold})")
+    total_batches = max(1, (len(targets) + BATCH_SIZE - 1) // BATCH_SIZE)
+    logger.info(
+        f"LLM refinement for {len(targets)} segments in {total_batches} batches "
+        f"(threshold={conf_threshold})"
+    )
 
     for i in range(0, len(targets), BATCH_SIZE):
+        batch_num = i // BATCH_SIZE + 1
         batch = targets[i : i + BATCH_SIZE]
+
+        # Progress: 20-80% range for LLM batches
+        batch_pct = 20 + int((batch_num / total_batches) * 60)
+        _cb("llm_batch", batch_pct, batch_num, total_batches)
+
+        batch_start = _time.time()
         results, err = _llm_annotate_batch(annotated, batch)
+        batch_elapsed = round(_time.time() - batch_start, 1)
+
+        logger.info(
+            f"LLM batch {batch_num}/{total_batches}: "
+            f"{len(batch)} segments, elapsed={batch_elapsed}s, "
+            f"{'OK' if err is None else 'FAILED'}"
+        )
 
         if err is not None:
-            # Collect context snippets around the failing batch
             context_snippets = []
             for seg in batch[:3]:
                 context_snippets.append({
@@ -407,6 +441,7 @@ def segment_speakers(
                 seg.confidence = float(r.get("confidence", seg.confidence))
                 seg.reason = r.get("reason", seg.reason) + " (llm)"
 
+    _cb("speaker_propagation", 85, 0, total_segs)
     _maybe_apply_propagation(annotated, config)
     return annotated, llm_errors
 

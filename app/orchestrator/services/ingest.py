@@ -237,87 +237,28 @@ def extract_epub_text(epub_path: Path) -> tuple[str, list[str]]:
     return "\n\n".join(chunks), warnings
 
 
-def _ocr_with_strategy(image: "Image.Image", lang: str, strategy: str) -> str:  # type: ignore[name-defined]
-    """Apply a preprocessing strategy then run tesseract. Returns stripped text."""
-    import pytesseract
 
-    if strategy == "original":
-        proc = image.convert("RGB")
-    elif strategy == "grayscale":
-        proc = image.convert("L")
-    elif strategy == "binarize_soft":
-        proc = image.convert("L")
-        proc = proc.point(lambda v: 255 if v > 128 else 0)
-    elif strategy == "binarize_hard":
-        proc = image.convert("L")
-        proc = proc.point(lambda v: 255 if v > 160 else 0)
-    elif strategy == "invert":
-        from PIL import ImageOps
-        proc = ImageOps.invert(image.convert("L"))
-    else:
-        proc = image.convert("RGB")
+def extract_image_text(
+    image_path: Path,
+    ocr_lang: str = "jpn+eng",
+    ocr_engine: str = "tesseract",
+) -> tuple[str, list[str]]:
+    """Extract text from an image using the specified OCR engine.
 
-    # Try vertical-then-horizontal for Japanese (jpn_vert has better results for
-    # traditional book layouts); fall back to the requested lang if unavailable.
-    for attempt_lang in ([f"{lang}+jpn_vert", lang] if "jpn" in lang and "vert" not in lang else [lang]):
-        try:
-            text = pytesseract.image_to_string(proc, lang=attempt_lang,
-                                               config="--psm 3")
-            text = text.strip()
-            if text:
-                return text
-        except Exception:
-            continue
-    return ""
+    Falls back to tesseract if the specified engine is unavailable.
+    """
+    from app.orchestrator.services.ocr.factory import get_engine
 
+    engine = get_engine(ocr_engine)
+    available, missing = engine.is_available()
+    if not available:
+        logger.warning(f"OCR engine '{ocr_engine}' unavailable ({missing}), falling back to tesseract")
+        engine = get_engine("tesseract")
+        available2, missing2 = engine.is_available()
+        if not available2:
+            return "", [f"OCRエンジン '{ocr_engine}' が利用不可: {missing}", f"フォールバック先の Tesseract も利用不可: {missing2}"]
 
-def extract_image_text(image_path: Path, ocr_lang: str = "jpn+eng") -> tuple[str, list[str]]:
-    warnings: list[str] = []
-    try:
-        from PIL import Image
-    except ImportError:
-        return "", ["Pillow not installed – pip install pillow"]
-    try:
-        import pytesseract  # noqa: F401
-    except ImportError:
-        return "", ["pytesseract not installed – pip install pytesseract"]
-
-    try:
-        image = Image.open(image_path)
-        # Upscale small images – tesseract accuracy drops below ~200dpi
-        min_dim = 1000
-        w, h = image.size
-        if max(w, h) < min_dim:
-            scale = min_dim / max(w, h)
-            image = image.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-    except Exception as exc:
-        return "", [f"Image open failed: {image_path.name}: {exc}"]
-
-    # Try strategies in order, stop at first non-empty result
-    best_text = ""
-    for strategy in ("grayscale", "original", "binarize_soft", "binarize_hard", "invert"):
-        try:
-            candidate = _ocr_with_strategy(image, ocr_lang, strategy)
-        except Exception as exc:
-            warnings.append(f"OCR strategy '{strategy}' failed: {image_path.name}: {exc}")
-            continue
-        if len(candidate) > len(best_text):
-            best_text = candidate
-        # Stop early once we have a reasonable amount of text
-        if len(best_text) >= 20:
-            break
-
-    if not best_text:
-        warnings.append(f"OCR returned empty result: {image_path.name}")
-        logger.warning(f"OCR empty for {image_path.name} (tried {ocr_lang})")
-    elif len(best_text) < 8:
-        warnings.append(f"OCR near-empty result ({len(best_text)} chars): {image_path.name}")
-        logger.warning(f"OCR near-empty for {image_path.name}: {best_text!r}")
-    else:
-        logger.info(f"OCR ok: {image_path.name} → {len(best_text)} chars")
-
-    wrapped = f"===== OCR: {image_path.name} =====\n{best_text}" if best_text else ""
-    return wrapped, warnings
+    return engine.extract_text(image_path, lang=ocr_lang)
 
 
 def build_combined_text(parts: list[IngestedText]) -> str:
@@ -352,6 +293,7 @@ def ingest_uploaded_file(
     project_dir: Path,
     temp_root: Path,
     progress_cb: Any = None,  # optional callable(stage, **kwargs) → None
+    ocr_engine: str = "tesseract",  # OCR engine to use
 ) -> IngestSummary:
     def _cb(stage: str, **kwargs: Any) -> None:
         if progress_cb is not None:
@@ -396,7 +338,7 @@ def ingest_uploaded_file(
         image_path = temp_root / filename
         image_path.write_bytes(raw)
         _cb("ocr_page", page=1, total_pages=1)
-        text, w = extract_image_text(image_path)
+        text, w = extract_image_text(image_path, ocr_engine=ocr_engine)
         warnings.extend(w)
         status = "ok" if text else "warning"
         ingested.append(IngestedText(relative_path=filename, kind="image", text=text, status="ok" if text else "skipped", warning="; ".join(w) if w else None))
@@ -441,7 +383,7 @@ def ingest_uploaded_file(
             elif pext in IMAGE_EXTENSIONS:
                 processed_count += 1
                 _cb("ocr_page", page=processed_count, total_pages=total_pages)
-                text, proc_warnings = extract_image_text(path)
+                text, proc_warnings = extract_image_text(path, ocr_engine=ocr_engine)
                 rel_entry["kind"] = "image"
 
             warnings.extend(proc_warnings)

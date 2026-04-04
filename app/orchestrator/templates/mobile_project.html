@@ -42,9 +42,24 @@
           <label class="m-btn m-btn-secondary m-file-btn">
             ファイルを選択
             <input type="file" id="mTxtFile"
-                   accept=".txt,.zip,.rar,.epub,.png,.jpg,.jpeg,.webp,.bmp">
+                   accept=".txt,.zip,.rar,.epub,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.tif,application/x-rar-compressed,application/vnd.rar,application/zip,application/epub+zip">
           </label>
-          <button class="m-btn m-btn-primary" onclick="mUpload()">アップロード</button>
+          <div style="font-size:0.72em;color:#64748b;margin-top:-4px">
+            対応: txt / zip / rar / epub / 画像
+            <br>※ iOSではRAR形式が選択できない場合があります。ZIP推奨。
+          </div>
+          <button class="m-btn m-btn-primary" onclick="mUpload()" id="mBtnUpload">アップロード</button>
+        </div>
+        <!-- Progress UI -->
+        <div id="mUploadProgress" style="display:none;margin-top:8px">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+            <span id="mUploadStageLabel" style="font-size:0.85em;font-weight:600">準備中...</span>
+            <span id="mUploadPct" style="font-size:0.8em;color:#64748b">0%</span>
+          </div>
+          <div style="background:#e2e8f0;border-radius:4px;height:6px;overflow:hidden">
+            <div id="mUploadProgressBar" style="width:0%;height:100%;background:#4f6ef7;transition:width .3s;border-radius:4px"></div>
+          </div>
+          <div id="mUploadPageInfo" style="font-size:0.75em;color:#64748b;margin-top:3px"></div>
         </div>
         <span id="mUploadStatus" class="m-status-inline"></span>
       {% endif %}
@@ -126,56 +141,174 @@
 <script>
 const projectId = '{{ project.id }}';
 
+const ERROR_LABELS = {
+  timeout: 'タイムアウト', extraction: 'アーカイブ展開失敗', ocr: 'OCR失敗',
+  encoding: 'エンコーディングエラー', network: 'ネットワークエラー',
+  llm: 'LLMエラー', unknown: 'エラー',
+};
+
+function _mSetStage(label, pct, isError) {
+  const stageEl = document.getElementById('mUploadStageLabel');
+  const pctEl = document.getElementById('mUploadPct');
+  const bar = document.getElementById('mUploadProgressBar');
+  if (stageEl) { stageEl.textContent = label; stageEl.style.color = isError ? '#c53030' : ''; }
+  if (pctEl) pctEl.textContent = pct + '%';
+  if (bar) { bar.style.width = pct + '%'; bar.style.background = isError ? '#ef4444' : '#4f6ef7'; }
+}
+
 async function mUpload() {
   const file = document.getElementById('mTxtFile').files[0];
   if (!file) { alert('ファイルを選択してください'); return; }
-  const el = document.getElementById('mUploadStatus');
-  el.textContent = 'アップロード中...';
-  el.className = 'm-status-inline';
+  const btn = document.getElementById('mBtnUpload');
+  if (btn) btn.disabled = true;
+  const progressEl = document.getElementById('mUploadProgress');
+  if (progressEl) progressEl.style.display = 'block';
+  _mSetStage('ファイル送信中...', 0);
+
   const fd = new FormData();
   fd.append('file', file);
-  const res = await fetch(`/api/projects/${projectId}/upload_text`, { method: 'POST', body: fd });
-  if (res.ok) {
-    location.reload();
-  } else {
-    const e = await res.json();
-    const detail = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail);
-    el.textContent = '失敗: ' + detail;
-    el.className = 'm-status-inline error';
+  try {
+    const res = await fetch('/api/projects/' + projectId + '/upload_text', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      _mSetStage('失敗: ' + (e.detail || 'エラー'), 0, true);
+      if (btn) btn.disabled = false;
+      return;
+    }
+    const data = await res.json();
+    _mSetStage('サーバー処理開始...', 5);
+    // Subscribe to SSE
+    _mWatchProgress(data.upload_id);
+  } catch(err) {
+    _mSetStage('ネットワークエラー', 0, true);
+    if (btn) btn.disabled = false;
   }
 }
+
+function _mWatchProgress(uploadId) {
+  if (!uploadId || !window.EventSource) { _mPollJob('ingest'); return; }
+  const es = new EventSource('/api/projects/' + projectId + '/upload/progress?upload_id=' + encodeURIComponent(uploadId));
+  es.onmessage = (ev) => {
+    try {
+      const d = JSON.parse(ev.data);
+      if (d.status === 'failed') {
+        _mSetStage('失敗: ' + (d.error || d.stage_label), 0, true);
+        es.close();
+        return;
+      }
+      _mSetStage(d.stage_label || d.stage, d.pct || 0);
+      if (d.page && d.total_pages) {
+        const info = document.getElementById('mUploadPageInfo');
+        if (info) info.textContent = 'ページ: ' + d.page + ' / ' + d.total_pages;
+      }
+      if (d.status === 'complete') { es.close(); setTimeout(() => location.reload(), 600); }
+    } catch(_) {}
+  };
+  es.onerror = () => { es.close(); _mPollJob('ingest'); };
+}
+
+function _mPollJob(jobType) {
+  const interval = setInterval(async () => {
+    try {
+      const res = await fetch('/api/projects/' + projectId + '/jobs?status=running');
+      if (!res.ok) { clearInterval(interval); return; }
+      const jobs = await res.json();
+      const job = jobs.find(j => j.job_type === jobType);
+      if (!job) {
+        clearInterval(interval);
+        const res2 = await fetch('/api/projects/' + projectId + '/jobs');
+        if (!res2.ok) return;
+        const all = await res2.json();
+        const recent = all.find(j => j.job_type === jobType);
+        if (recent && recent.status === 'completed') {
+          if (jobType === 'ingest') _mSetStage('完了！', 100);
+          setTimeout(() => location.reload(), 600);
+        } else if (recent && recent.status === 'failed') {
+          const cat = ERROR_LABELS[recent.error_category] || ERROR_LABELS.unknown;
+          if (jobType === 'ingest') _mSetStage(cat + ': ' + (recent.error_message || ''), 0, true);
+          else {
+            const el = document.getElementById('mSegmentStatus');
+            if (el) { el.textContent = cat; el.className = 'm-status-inline error'; }
+          }
+        }
+        return;
+      }
+      if (jobType === 'ingest') {
+        _mSetStage(job.stage_label || job.stage, job.progress_pct || 0);
+      } else if (jobType === 'speaker_segmentation') {
+        const el = document.getElementById('mSegmentStatus');
+        if (el) el.textContent = (job.stage_label || '処理中') + ' (' + job.progress_pct + '%)';
+      }
+    } catch(e) {}
+  }, 1500);
+}
+
+// Reload recovery
+(async function() {
+  try {
+    const res = await fetch('/api/projects/' + projectId + '/jobs?status=running');
+    if (!res.ok) return;
+    const jobs = await res.json();
+    if (jobs.find(j => j.job_type === 'ingest')) {
+      const el = document.getElementById('mUploadProgress');
+      if (el) el.style.display = 'block';
+      const btn = document.getElementById('mBtnUpload');
+      if (btn) btn.disabled = true;
+      _mSetStage('処理継続中...', 0);
+      _mPollJob('ingest');
+    }
+    if (jobs.find(j => j.job_type === 'speaker_segmentation')) {
+      const el = document.getElementById('mSegmentStatus');
+      if (el) el.textContent = '処理継続中...';
+      _mPollJob('speaker_segmentation');
+    }
+  } catch(e) {}
+})();
 
 async function mPreprocess() {
   const el = document.getElementById('mPreprocessStatus');
   el.textContent = '実行中...';
   el.className = 'm-status-inline';
-  const res = await fetch(`/api/projects/${projectId}/preprocess`, { method: 'POST' });
-  if (res.ok) {
-    const d = await res.json();
-    el.textContent = `完了: ${d.segment_count} セグメント`;
-    setTimeout(() => location.reload(), 1000);
-  } else {
-    const e = await res.json();
-    const detail = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail);
-    el.textContent = '失敗: ' + detail;
+  try {
+    const res = await fetch('/api/projects/' + projectId + '/preprocess', { method: 'POST' });
+    if (res.ok) {
+      const d = await res.json();
+      el.textContent = '完了: ' + d.segment_count + ' セグメント';
+      setTimeout(() => location.reload(), 1000);
+    } else {
+      const e = await res.json().catch(() => ({}));
+      el.textContent = '失敗: ' + (typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail || e));
+      el.className = 'm-status-inline error';
+    }
+  } catch(err) {
+    el.textContent = 'エラー: ' + err.message;
     el.className = 'm-status-inline error';
   }
 }
 
 async function mSegment() {
   const el = document.getElementById('mSegmentStatus');
-  el.textContent = '実行中...';
+  el.textContent = '開始中...';
   el.className = 'm-status-inline';
-  const res = await fetch(`/api/projects/${projectId}/segment_speakers`, { method: 'POST' });
-  if (res.ok) {
-    const d = await res.json();
-    el.textContent = `完了: ${d.speaker_count} 話者`;
-    setTimeout(() => location.reload(), 1000);
-  } else {
-    const e = await res.json();
-    const detail = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail);
-    el.textContent = '失敗: ' + detail;
+  try {
+    const res = await fetch('/api/projects/' + projectId + '/segment_speakers', { method: 'POST' });
+    const d = await res.json().catch(() => ({}));
+    if (res.ok) {
+      if (d.job_id) {
+        el.textContent = '処理中...';
+        _mPollJob('speaker_segmentation');
+      } else {
+        el.textContent = '完了: ' + d.speaker_count + ' 話者';
+        setTimeout(() => location.reload(), 1000);
+      }
+    } else {
+      el.textContent = '失敗: ' + (typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail || d));
+      el.className = 'm-status-inline error';
+    }
+  } catch(err) {
+    el.textContent = 'ネットワークエラー。サーバーで処理中の可能性があります。';
     el.className = 'm-status-inline error';
+    _mPollJob('speaker_segmentation');
   }
 }
 </script>
