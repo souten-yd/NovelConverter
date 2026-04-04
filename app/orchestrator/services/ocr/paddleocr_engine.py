@@ -43,6 +43,40 @@ class PaddleOCREngine(OCREngine):
     # page instead of repeating the same exception message N times.
     _init_error: Optional[str] = None
 
+    # GPU / device configuration (used by the enhanced pipeline)
+    _device: str = "gpu:0"
+    _use_layout: bool = False
+
+    @classmethod
+    def configure(cls, device: str = "gpu:0", use_layout: bool = False) -> None:
+        """Configure GPU device and layout mode for the enhanced pipeline.
+
+        Call this before the first OCR invocation to set device preferences.
+        If the instance is already created, it will be recreated on next init.
+        """
+        if cls._device != device or cls._use_layout != use_layout:
+            cls._device = device
+            cls._use_layout = use_layout
+            # Force re-init on next call if device changed
+            if cls._ocr_instance is not None:
+                cls._ocr_instance = None
+                cls._init_error = None
+                logger.info(f"PaddleOCR config changed: device={device} layout={use_layout}")
+
+    @classmethod
+    def get_raw_ocr_result(cls, image_path: str, lang: str = "japan") -> list:
+        """Return raw PaddleOCR result with bounding boxes and confidence.
+
+        Used by the enhanced pipeline for token-level extraction.
+        Returns the raw result list from paddleocr.ocr().
+        """
+        paddle_lang = "japan" if "jpn" in lang or lang == "japan" else "en"
+        cls._init_ocr(paddle_lang)
+        if cls._ocr_instance is None:
+            return []
+        result = cls._ocr_instance.ocr(str(image_path), cls=True)
+        return result if result else []
+
     def is_available(self) -> tuple[bool, str]:
         missing = []
         version = "unknown"

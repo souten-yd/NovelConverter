@@ -261,6 +261,81 @@ def extract_image_text(
     return engine.extract_text(image_path, lang=ocr_lang)
 
 
+def extract_images_parallel(
+    image_paths: list[Path],
+    ocr_engine: str = "tesseract",
+    progress_cb: Any = None,
+) -> tuple[list[tuple[Path, str, list[str]]], list[str]]:
+    """Extract text from multiple images using the enhanced OCR pipeline.
+
+    Uses the new parallel pipeline when multiple images are provided and
+    a pipeline-compatible engine is selected.  Falls back to sequential
+    processing otherwise.
+
+    Returns:
+        ([(path, text, warnings), ...], global_warnings)
+    """
+    if len(image_paths) < 2 or ocr_engine == "tesseract":
+        # Sequential fallback for single images or Tesseract
+        results = []
+        warnings_all = []
+        for i, p in enumerate(image_paths):
+            text, w = extract_image_text(p, ocr_engine=ocr_engine)
+            results.append((p, text, w))
+            warnings_all.extend(w)
+            if progress_cb:
+                try:
+                    progress_cb("ocr_page", page=i + 1, total_pages=len(image_paths))
+                except Exception:
+                    pass
+        return results, warnings_all
+
+    # Use the enhanced pipeline
+    try:
+        from app.orchestrator.services.ocr.pipeline import run_pipeline_for_ingest
+
+        def _pipeline_cb(stage, cur, total, pct):
+            if progress_cb and stage == "ocr":
+                try:
+                    progress_cb("ocr_page", page=cur, total_pages=total)
+                except Exception:
+                    pass
+
+        pipeline_result = run_pipeline_for_ingest(
+            image_paths,
+            ocr_engine=ocr_engine,
+            progress_cb=_pipeline_cb,
+        )
+
+        results = []
+        warnings_all = []
+        # Build path → result mapping, sorted by page_index
+        for page in sorted(pipeline_result.pages, key=lambda p: p.page_index):
+            idx = page.page_index
+            path = image_paths[idx] if idx < len(image_paths) else Path(page.image_path)
+            text = page.plain_text
+            w = page.warnings
+            if page.status == "error":
+                w = [page.error_message] + w
+            # Add the OCR header for compatibility with existing flow
+            if text:
+                text = f"===== OCR: {path.name} =====\n{text}"
+            results.append((path, text, w))
+            warnings_all.extend(w)
+
+        return results, warnings_all
+
+    except Exception as exc:
+        logger.warning(f"Enhanced pipeline failed, falling back to sequential: {exc}")
+        results = []
+        warnings_all = [f"Enhanced pipeline error: {exc}"]
+        for i, p in enumerate(image_paths):
+            text, w = extract_image_text(p, ocr_engine=ocr_engine)
+            results.append((p, text, w))
+            warnings_all.extend(w)
+        return results, warnings_all
+
+
 def build_combined_text(parts: list[IngestedText]) -> str:
     ordered = sorted(parts, key=lambda p: p.relative_path)
     # Prefer fully-ok items; fall back to warning-status items so partial OCR
@@ -364,7 +439,13 @@ def ingest_uploaded_file(
         entry_by_path = {entry["relative_path"]: entry for entry in extracted_files}
         extracted_root = temp_root / "extracted"
         processed_count = 0
-        for path in sorted(supported_paths):
+
+        # Separate image and non-image files
+        image_supported = [p for p in sorted(supported_paths) if p.suffix.lower() in IMAGE_EXTENSIONS]
+        non_image_supported = [p for p in sorted(supported_paths) if p.suffix.lower() not in IMAGE_EXTENSIONS]
+
+        # Process non-image files sequentially
+        for path in non_image_supported:
             rel_key = str(path.relative_to(extracted_root)).replace("\\", "/")
             rel_entry = entry_by_path.get(rel_key)
             if not rel_entry:
@@ -380,15 +461,8 @@ def ingest_uploaded_file(
                 _cb("ocr_page", page=processed_count + 1, total_pages=total_pages)
                 text, proc_warnings = extract_epub_text(path)
                 rel_entry["kind"] = "epub"
-            elif pext in IMAGE_EXTENSIONS:
-                processed_count += 1
-                _cb("ocr_page", page=processed_count, total_pages=total_pages)
-                text, proc_warnings = extract_image_text(path, ocr_engine=ocr_engine)
-                rel_entry["kind"] = "image"
 
             warnings.extend(proc_warnings)
-            for wi in proc_warnings:
-                _cb("ocr_page", page=processed_count, total_pages=total_pages, warning=wi)
             rel_entry["chars"] = len(text)
             rel_entry["status"] = "ok" if text else "warning"
             rel_entry["warning"] = "; ".join(proc_warnings) if proc_warnings else None
@@ -402,6 +476,38 @@ def ingest_uploaded_file(
                     warning=rel_entry["warning"],
                 )
             )
+
+        # Process image files using parallel pipeline
+        if image_supported:
+            ocr_results, ocr_warnings = extract_images_parallel(
+                image_supported,
+                ocr_engine=ocr_engine,
+                progress_cb=progress_cb,
+            )
+            warnings.extend(ocr_warnings)
+
+            for path, text, proc_warnings in ocr_results:
+                rel_key = str(path.relative_to(extracted_root)).replace("\\", "/")
+                rel_entry = entry_by_path.get(rel_key)
+                if not rel_entry:
+                    continue
+
+                rel_entry["kind"] = "image"
+                for wi in proc_warnings:
+                    _cb("ocr_page", page=processed_count, total_pages=total_pages, warning=wi)
+                rel_entry["chars"] = len(text)
+                rel_entry["status"] = "ok" if text else "warning"
+                rel_entry["warning"] = "; ".join(proc_warnings) if proc_warnings else None
+
+                ingested.append(
+                    IngestedText(
+                        relative_path=rel_entry["relative_path"],
+                        kind=rel_entry["kind"],
+                        text=text,
+                        status="ok" if text else "skipped",
+                        warning=rel_entry["warning"],
+                    )
+                )
 
     _cb("text_merge")
     combined = build_combined_text(ingested)

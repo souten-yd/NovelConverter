@@ -234,7 +234,7 @@ class NormalizationLog(Base):
 
 
 class OcrPage(Base):
-    """Tracks per-page OCR confidence and flags low-quality pages."""
+    """Tracks per-page OCR confidence, ruby detection, and timing."""
     __tablename__ = "ocr_pages"
 
     id = Column(String, primary_key=True, default=_uuid)
@@ -246,6 +246,21 @@ class OcrPage(Base):
     char_count = Column(Integer, default=0)
     low_confidence = Column(Boolean, default=False) # flagged for human review
     warnings = Column(JSON, default=list)
+    # Enhanced pipeline fields
+    elapsed_ms = Column(Integer, default=0)           # OCR processing time
+    ruby_detected = Column(Boolean, default=False)    # ruby annotations found
+    ruby_confidence = Column(Float, default=0.0)      # ruby detection confidence 0-1
+    ruby_mode = Column(String, default="none")        # none / possible / detected
+    ruby_candidates_count = Column(Integer, default=0)
+    plain_text = Column(Text, nullable=True)          # ruby-stripped text
+    ruby_text = Column(Text, nullable=True)           # annotated: 漢字(かんじ)
+    ruby_html = Column(Text, nullable=True)           # <ruby>漢字<rt>かんじ</rt></ruby>
+    layout_complexity = Column(Float, default=0.0)    # 0-1 from scheduler
+    ruby_attachments = Column(JSON, default=list)     # [{base, ruby, confidence}]
+    structured_lines = Column(JSON, default=list)     # structured line data
+    image_path = Column(String, nullable=True)        # path to page image
+    status = Column(String, default="ok")             # ok / error / warning
+    error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now())
 
     project = relationship("Project", back_populates="ocr_pages")

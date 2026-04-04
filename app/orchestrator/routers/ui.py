@@ -191,6 +191,17 @@ def stream_voice_preview(speaker_id: str, filename: str):
     return FileResponse(str(audio_path), media_type="audio/wav")
 
 
+@router.get("/projects/{project_id}/ocr_viewer", response_class=HTMLResponse)
+def ocr_viewer_page(project_id: str, request: Request, db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404)
+    return templates.TemplateResponse(
+        request, "ocr_viewer.html",
+        {"project": project},
+    )
+
+
 @router.get("/projects/{project_id}/voice_studio", response_class=HTMLResponse)
 def voice_studio_page(project_id: str, request: Request, db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
