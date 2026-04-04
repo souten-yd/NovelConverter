@@ -96,26 +96,12 @@ class DiarizationConfig:
     rules: List[RuleSpec] = field(
         default_factory=lambda: [RuleSpec(r) for r in DEFAULT_RULE_ORDER]
     )
-    # LLM fallback mode: "disabled" | "on_error" | "always"
-    # - disabled: no LLM usage
-    # - on_error: LLM used only for low-confidence / unknown speakers (default behaviour)
-    # - always: LLM normalises / cleans every segment text before saving
-    llm_fallback_mode: str = "on_error"
 
     def get_rule(self, rule_id: str) -> Optional[RuleSpec]:
         for r in self.rules:
             if r.rule_id == rule_id and r.enabled:
                 return r
         return None
-
-
-@dataclass
-class LlmBatchError:
-    """Captures failure details for a single LLM annotation batch."""
-    batch_order_indices: List[int]
-    exception_type: str
-    message: str
-    raw_response_excerpt: str  # first 300 chars of LLM response (if available)
 
 
 # ── Rule-based pre-pass ───────────────────────────────────────────────────────
@@ -244,17 +230,14 @@ def _get_llm_model() -> str:
 def _llm_annotate_batch(
     segments: List[AnnotatedSegment],
     batch: List[AnnotatedSegment],
-) -> tuple[List[dict], Optional[LlmBatchError]]:
-    """Call LLM for a batch.
-
-    Returns (results, error_info).
-    - On success: (list_of_dicts, None)
-    - On failure: ([], LlmBatchError)
-    """
+) -> List[dict]:
+    """Call LLM for a batch and return list of dicts."""
     llm_url = _get_llm_api_url()
     if not llm_url:
-        return [], None
+        return []
 
+    # build context
+    all_indices = {s.order_index: s for s in segments}
     target_idx = [s.order_index for s in batch]
 
     context_set = set(target_idx)
@@ -290,7 +273,6 @@ def _llm_annotate_batch(
         "max_tokens": 1500,
     }
 
-    raw_content = ""
     try:
         resp = requests.post(
             f"{llm_url.rstrip('/')}/chat/completions",
@@ -299,34 +281,13 @@ def _llm_annotate_batch(
             timeout=60,
         )
         resp.raise_for_status()
-        # Touch last_used_at so auto-unload timer resets on LLM activity
-        try:
-            from app.orchestrator.services.llm_manager import touch_last_used
-            touch_last_used()
-        except Exception:
-            pass
-        raw_content = resp.json()["choices"][0]["message"]["content"].strip()
-        cleaned = re.sub(r"```json\s*", "", raw_content)
-        cleaned = re.sub(r"```\s*", "", cleaned)
-        return json.loads(cleaned), None
-    except json.JSONDecodeError as e:
-        err = LlmBatchError(
-            batch_order_indices=target_idx,
-            exception_type="JSONDecodeError",
-            message=str(e),
-            raw_response_excerpt=raw_content[:300],
-        )
-        logger.warning(f"LLM JSON parse failed for batch {target_idx}: {e} | response excerpt: {raw_content[:200]!r}")
-        return [], err
+        content = resp.json()["choices"][0]["message"]["content"].strip()
+        content = re.sub(r"```json\s*", "", content)
+        content = re.sub(r"```\s*", "", content)
+        return json.loads(content)
     except Exception as e:
-        err = LlmBatchError(
-            batch_order_indices=target_idx,
-            exception_type=type(e).__name__,
-            message=str(e),
-            raw_response_excerpt=raw_content[:300] if raw_content else "",
-        )
-        logger.warning(f"LLM call failed for batch {target_idx}: {e}")
-        return [], err
+        logger.warning(f"LLM call failed: {e}")
+        return []
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -337,17 +298,13 @@ BATCH_SIZE = 20
 def segment_speakers(
     raw_segments: List[RawSegment],
     config: Optional[DiarizationConfig] = None,
-) -> tuple[List[AnnotatedSegment], List[dict]]:
+) -> List[AnnotatedSegment]:
     """Full pipeline: rule-based → LLM refinement.
-
-    Returns (annotated_segments, llm_errors).
-    ``llm_errors`` is a list of error detail dicts (empty on success).
 
     ``config`` is optional. When omitted the full default pipeline runs,
     which is equivalent to all rules enabled – matching original behaviour.
     """
     annotated = rule_based_pass(raw_segments, config=config)
-    llm_errors: List[dict] = []
 
     llm_url = _get_llm_api_url()
     run_llm = llm_url != ""
@@ -357,7 +314,7 @@ def segment_speakers(
     if not run_llm:
         logger.info("LLM refinement disabled – using rule-based only")
         _maybe_apply_propagation(annotated, config)
-        return annotated, llm_errors
+        return annotated
 
     llm_spec = config.get_rule("llm_refinement") if config else None
     conf_threshold = float(
@@ -372,31 +329,7 @@ def segment_speakers(
 
     for i in range(0, len(targets), BATCH_SIZE):
         batch = targets[i : i + BATCH_SIZE]
-        results, err = _llm_annotate_batch(annotated, batch)
-
-        if err is not None:
-            # Collect context snippets around the failing batch
-            context_snippets = []
-            for seg in batch[:3]:
-                context_snippets.append({
-                    "order_index": seg.order_index,
-                    "text_excerpt": seg.normalized_text[:80],
-                    "predicted_speaker": seg.predicted_speaker,
-                    "confidence": round(seg.confidence, 3),
-                })
-            llm_errors.append({
-                "batch_order_indices": err.batch_order_indices,
-                "exception_type": err.exception_type,
-                "message": err.message,
-                "raw_response_excerpt": err.raw_response_excerpt,
-                "context_snippets": context_snippets,
-            })
-            logger.warning(
-                f"LLM batch failed: indices={err.batch_order_indices} "
-                f"type={err.exception_type} msg={err.message}"
-            )
-            continue
-
+        results = _llm_annotate_batch(annotated, batch)
         result_map = {r["order_index"]: r for r in results}
 
         for seg in batch:
@@ -408,7 +341,7 @@ def segment_speakers(
                 seg.reason = r.get("reason", seg.reason) + " (llm)"
 
     _maybe_apply_propagation(annotated, config)
-    return annotated, llm_errors
+    return annotated
 
 
 def _maybe_apply_propagation(

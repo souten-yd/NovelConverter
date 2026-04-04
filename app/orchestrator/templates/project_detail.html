@@ -28,33 +28,11 @@
       {% if project.raw_text_path %}
         <p class="text-success">✓ アップロード済み</p>
         <p class="text-small">{{ project.uploaded_filename or project.raw_text_path.split('/')[-1] }}</p>
-        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-          <a href="/api/projects/{{ project.id }}/download_text?variant=normalized"
-             class="btn btn-outline btn-sm" download>⬇ 正規化テキスト (.txt)</a>
-          <a href="/api/projects/{{ project.id }}/download_text?variant=manifest"
-             class="btn btn-outline btn-sm" download>⬇ 取り込みレポート (.json)</a>
-          {% if seg_count > 0 %}
-          <a href="/api/projects/{{ project.id }}/download_text?variant=segmented"
-             class="btn btn-outline btn-sm" download>⬇ セグメントテキスト (.txt)</a>
-          {% endif %}
-        </div>
       {% else %}
         <form id="uploadForm" enctype="multipart/form-data">
           <input type="file" id="txtFile" accept=".txt,.zip,.rar,.epub,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.tif,application/x-rar-compressed,application/vnd.rar" class="input">
-          <button type="button" class="btn btn-primary" onclick="uploadText()" id="btnUpload" style="margin-top:8px">アップロード</button>
+          <button type="button" class="btn btn-primary" onclick="uploadText()">アップロード</button>
         </form>
-        <!-- Progress UI (hidden initially) -->
-        <div id="uploadProgress" style="display:none;margin-top:12px">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-            <span id="uploadStageLabel" style="font-size:0.9em;font-weight:600">準備中...</span>
-            <span id="uploadPct" style="font-size:0.85em;color:#64748b">0%</span>
-          </div>
-          <div style="background:#e2e8f0;border-radius:4px;height:8px;overflow:hidden">
-            <div id="uploadProgressBar" style="width:0%;height:100%;background:#4f6ef7;transition:width .3s;border-radius:4px"></div>
-          </div>
-          <div id="uploadPageInfo" style="font-size:0.8em;color:#64748b;margin-top:4px"></div>
-          <div id="uploadWarnings" style="margin-top:6px"></div>
-        </div>
       {% endif %}
     </div>
   </div>
@@ -98,10 +76,7 @@
     <div class="step-num">5</div>
     <div class="step-body">
       <h3>音声設定</h3>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <a href="/projects/{{ project.id }}/voice_studio" class="btn btn-primary" {{ 'disabled' if sp_count == 0 }}>🎨 Voice Design Studio →</a>
-        <a href="/projects/{{ project.id }}/voice_mapping" class="btn btn-outline btn-sm" {{ 'disabled' if sp_count == 0 }}>シンプル設定</a>
-      </div>
+      <a href="/projects/{{ project.id }}/voice_mapping" class="btn btn-outline" {{ 'disabled' if sp_count == 0 }}>音声割当を開く →</a>
     </div>
   </div>
 
@@ -123,78 +98,11 @@ const projectId = '{{ project.id }}';
 async function uploadText() {
   const file = document.getElementById('txtFile').files[0];
   if (!file) { alert('ファイルを選択してください'); return; }
-
-  // Show progress UI
-  const btn = document.getElementById('btnUpload');
-  btn.disabled = true;
-  document.getElementById('uploadProgress').style.display = 'block';
-  _setUploadStage('アップロード中...', 2);
-
   const fd = new FormData();
   fd.append('file', file);
-
-  let uploadId = null;
-  try {
-    const res = await fetch(`/api/projects/${projectId}/upload_text`, { method: 'POST', body: fd });
-    if (!res.ok) {
-      const e = await res.json().catch(() => ({}));
-      const detail = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail || e);
-      _setUploadStage('失敗: ' + detail, 0, true);
-      btn.disabled = false;
-      return;
-    }
-    const data = await res.json();
-    uploadId = data.upload_id;
-
-    // The request already completed synchronously on the server.
-    // Show a brief "complete" state then reload.
-    _setUploadStage('完了！', 100);
-    setTimeout(() => location.reload(), 800);
-  } catch(err) {
-    _setUploadStage('エラー: ' + err.message, 0, true);
-    btn.disabled = false;
-  }
-}
-
-// Subscribe to SSE progress (called before or after upload depending on timing)
-function _watchUploadProgress(uploadId) {
-  if (!uploadId || !window.EventSource) return;
-  const es = new EventSource(`/api/projects/${projectId}/upload/progress?upload_id=${encodeURIComponent(uploadId)}`);
-  es.onmessage = (ev) => {
-    try {
-      const d = JSON.parse(ev.data);
-      const isError = d.status === 'failed';
-      _setUploadStage(d.stage_label || d.stage, d.pct || 0, isError);
-      if (d.page && d.total_pages) {
-        const info = document.getElementById('uploadPageInfo');
-        if (info) info.textContent = `ページ: ${d.page} / ${d.total_pages}`;
-      }
-      if (d.warnings && d.warnings.length) {
-        const wEl = document.getElementById('uploadWarnings');
-        if (wEl) wEl.innerHTML = d.warnings.map(w =>
-          `<div style="font-size:0.78em;color:#92400e;background:#fef3c7;padding:3px 6px;border-radius:4px;margin-top:2px">⚠ ${escHtmlDetail(w)}</div>`
-        ).join('');
-      }
-      if (d.status === 'complete' || d.status === 'failed') {
-        es.close();
-        if (d.status === 'complete') setTimeout(() => location.reload(), 600);
-      }
-    } catch(_) {}
-  };
-  es.onerror = () => es.close();
-}
-
-function _setUploadStage(label, pct, isError) {
-  const stageEl = document.getElementById('uploadStageLabel');
-  const pctEl = document.getElementById('uploadPct');
-  const bar = document.getElementById('uploadProgressBar');
-  if (stageEl) { stageEl.textContent = label; stageEl.style.color = isError ? '#c53030' : ''; }
-  if (pctEl) pctEl.textContent = pct + '%';
-  if (bar) { bar.style.width = pct + '%'; bar.style.background = isError ? '#ef4444' : '#4f6ef7'; }
-}
-
-function escHtmlDetail(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const res = await fetch(`/api/projects/${projectId}/upload_text`, { method: 'POST', body: fd });
+  if (res.ok) { location.reload(); }
+  else { const e = await res.json(); const detail = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail); alert('アップロード失敗: ' + detail); }
 }
 
 async function runPreprocess() {
@@ -215,26 +123,15 @@ async function runPreprocess() {
 async function runSegment() {
   const el = document.getElementById('segmentStatus');
   el.textContent = '実行中...';
-  el.style.color = '';
-  try {
-    const res = await fetch(`/api/projects/${projectId}/segment_speakers`, { method: 'POST' });
-    const d = await res.json().catch(() => ({}));
-    if (res.ok) {
-      const errCount = d.llm_error_count || 0;
-      el.textContent = `完了: ${d.speaker_count} 話者${errCount > 0 ? ` (LLMエラー: ${errCount}件 – 分割スタジオで詳細確認できます)` : ''}`;
-      el.style.color = errCount > 0 ? '#c05621' : '';
-      setTimeout(() => location.reload(), 1200);
-    } else {
-      const detail = d.detail
-        ? (typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail))
-        : JSON.stringify(d);
-      el.textContent = '失敗: ' + detail;
-      el.style.color = 'red';
-    }
-  } catch(err) {
-    el.textContent = 'エラー: ' + err.message + ' (ネットワーク障害またはサーバーエラー)';
+  const res = await fetch(`/api/projects/${projectId}/segment_speakers`, { method: 'POST' });
+  if (res.ok) {
+    const d = await res.json();
+    el.textContent = `完了: ${d.speaker_count} 話者`;
+    setTimeout(() => location.reload(), 800);
+  } else {
+    const e = await res.json();
+    el.textContent = '失敗: ' + JSON.stringify(e.detail);
     el.style.color = 'red';
-    console.error('[runSegment] unexpected error:', err);
   }
 }
 </script>

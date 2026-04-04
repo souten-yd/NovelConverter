@@ -33,27 +33,23 @@ class LoadRequest(BaseModel):
     model_filename: str
     n_gpu_layers: int = -1
     ctx_size: int = 4096
-    batch_size: int = 512
-    threads: int = -1
-    flash_attn: bool = False
-
-
-class ModelSettingsRequest(BaseModel):
-    model_filename: str
-    n_gpu_layers: int = -1
-    ctx_size: int = 4096
-    batch_size: int = 512
-    threads: int = -1
-    flash_attn: bool = False
-    auto_unload_seconds: int = 0  # 0 = disabled
-    is_main_model: bool = False
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/status")
 def get_status():
-    return llm_manager.get_server_status_dict()
+    state = llm_manager.get_server_status()
+    return {
+        "status": state.status,
+        "model_filename": state.model_filename,
+        "model_path": state.model_path,
+        "port": state.port,
+        "pid": state.pid,
+        "error": state.error,
+        "stderr": state.stderr,
+        "binary_available": llm_manager.check_binary_available(),
+    }
 
 
 @router.get("/models")
@@ -91,9 +87,6 @@ def load_model(body: LoadRequest):
             body.model_filename,
             n_gpu_layers=body.n_gpu_layers,
             ctx_size=body.ctx_size,
-            batch_size=body.batch_size,
-            threads=body.threads,
-            flash_attn=body.flash_attn,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -105,7 +98,6 @@ def load_model(body: LoadRequest):
         "port": state.port,
         "error": state.error,
         "stderr": state.stderr,
-        "load_params": state.load_params,
     }
 
 
@@ -124,37 +116,3 @@ def delete_model(model_filename: str):
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return {"deleted": True, "filename": model_filename}
-
-
-# ── Per-model settings ────────────────────────────────────────────────────────
-
-@router.post("/settings")
-def save_model_settings(body: ModelSettingsRequest):
-    """Persist per-model load settings and auto-unload config."""
-    updates = {
-        "n_gpu_layers": body.n_gpu_layers,
-        "ctx_size": body.ctx_size,
-        "batch_size": body.batch_size,
-        "threads": body.threads,
-        "flash_attn": body.flash_attn,
-        "auto_unload_seconds": body.auto_unload_seconds,
-        "is_main_model": body.is_main_model,
-    }
-    merged = llm_manager.update_model_setting(body.model_filename, updates)
-
-    # If auto_unload changed, the running watcher will pick it up on next cycle
-    logger.info(f"Saved settings for model {body.model_filename!r}: {updates}")
-    return {"saved": True, "model_filename": body.model_filename, "settings": merged}
-
-
-@router.get("/settings/{model_filename:path}")
-def get_model_settings(model_filename: str):
-    """Return stored settings for a model (merged with defaults)."""
-    return llm_manager.get_model_setting(model_filename)
-
-
-@router.get("/main_model")
-def get_main_model():
-    """Return the filename of the model marked as 'main', if any."""
-    main = llm_manager.get_main_model()
-    return {"main_model": main}

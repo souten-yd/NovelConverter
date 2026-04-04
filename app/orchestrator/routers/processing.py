@@ -157,18 +157,6 @@ class RuleSpecIn(BaseModel):
 
 class SegmentSpeakersRequest(BaseModel):
     rules: Optional[List[RuleSpecIn]] = None
-    llm_fallback_mode: str = "on_error"  # disabled | on_error | always
-
-
-def _build_config(body: Optional[SegmentSpeakersRequest]) -> Optional[DiarizationConfig]:
-    if body is None:
-        return None
-    if body.rules is None:
-        return None
-    return DiarizationConfig(
-        rules=[RuleSpec(rule_id=r.rule_id, enabled=r.enabled, params=r.params) for r in body.rules],
-        llm_fallback_mode=body.llm_fallback_mode,
-    )
 
 
 @router.post("/{project_id}/segment_speakers")
@@ -198,8 +186,13 @@ def segment_speakers_endpoint(
         for s in db_segs
     ]
 
-    config = _build_config(body)
-    annotated, llm_errors = segment_speakers(raw_segments, config=config)
+    config: Optional[DiarizationConfig] = None
+    if body and body.rules is not None:
+        config = DiarizationConfig(
+            rules=[RuleSpec(rule_id=r.rule_id, enabled=r.enabled, params=r.params) for r in body.rules]
+        )
+
+    annotated = segment_speakers(raw_segments, config=config)
     ann_map = {a.order_index: a for a in annotated}
 
     for seg in db_segs:
@@ -228,19 +221,8 @@ def segment_speakers_endpoint(
 
     project.status = "segmented"
     db.commit()
-
-    if llm_errors:
-        logger.warning(f"Speaker segmentation completed with {len(llm_errors)} LLM errors: project={project_id}")
-    else:
-        logger.info(f"Speaker segmentation done: {len(speaker_list)} speakers")
-
-    return {
-        "project_id": project_id,
-        "segment_count": len(db_segs),
-        "speaker_count": len(speaker_list),
-        "llm_errors": llm_errors,
-        "llm_error_count": len(llm_errors),
-    }
+    logger.info(f"Speaker segmentation done: {len(speaker_list)} speakers")
+    return {"project_id": project_id, "segment_count": len(db_segs), "speaker_count": len(speaker_list)}
 
 
 # ── Diarization studio endpoints ──────────────────────────────────────────────
@@ -253,7 +235,6 @@ def get_diarization_rules(project_id: str):
 
 class PreviewDiarizationRequest(BaseModel):
     rules: List[RuleSpecIn]
-    llm_fallback_mode: str = "on_error"  # disabled | on_error | always
 
 
 @router.post("/{project_id}/preview_diarization")
@@ -285,13 +266,12 @@ def preview_diarization(
     ]
 
     config = DiarizationConfig(
-        rules=[RuleSpec(rule_id=r.rule_id, enabled=r.enabled, params=r.params) for r in body.rules],
-        llm_fallback_mode=body.llm_fallback_mode,
+        rules=[RuleSpec(rule_id=r.rule_id, enabled=r.enabled, params=r.params) for r in body.rules]
     )
 
-    annotated, llm_errors = segment_speakers(raw_segments, config=config)
+    annotated = segment_speakers(raw_segments, config=config)
 
-    segments_out = [
+    return [
         {
             "chapter_index": a.chapter_index,
             "order_index": a.order_index,
@@ -304,10 +284,3 @@ def preview_diarization(
         }
         for a in annotated
     ]
-
-    # Return as dict to include llm_errors alongside segments
-    return {
-        "segments": segments_out,
-        "llm_errors": llm_errors,
-        "llm_error_count": len(llm_errors),
-    }

@@ -347,19 +347,7 @@ def _load_text_bytes(content: bytes, filename: str) -> str:
         os.unlink(tmp_path)
 
 
-def ingest_uploaded_file(
-    upload_file: Any,
-    project_dir: Path,
-    temp_root: Path,
-    progress_cb: Any = None,  # optional callable(stage, **kwargs) → None
-) -> IngestSummary:
-    def _cb(stage: str, **kwargs: Any) -> None:
-        if progress_cb is not None:
-            try:
-                progress_cb(stage, **kwargs)
-            except Exception:
-                pass  # never let progress tracking break ingest
-
+def ingest_uploaded_file(upload_file: Any, project_dir: Path, temp_root: Path) -> IngestSummary:
     filename = upload_file.filename or "upload.bin"
     ext = Path(filename).suffix.lower()
     if ext not in UPLOAD_EXTENSIONS:
@@ -371,7 +359,6 @@ def ingest_uploaded_file(
     ingested: list[IngestedText] = []
 
     temp_root.mkdir(parents=True, exist_ok=True)
-    _cb("upload")
 
     if ext in TEXT_EXTENSIONS:
         text = _load_text_bytes(raw, filename)
@@ -379,23 +366,17 @@ def ingest_uploaded_file(
         extracted_files.append({"relative_path": filename, "kind": "txt", "chars": len(text), "status": "ok", "warning": None})
         detected = source_type = "txt"
     elif ext == ".epub":
-        _cb("unpack")
         epub_path = temp_root / filename
         epub_path.write_bytes(raw)
-        _cb("page_scan")
         text, w = extract_epub_text(epub_path)
-        for wi in w:
-            _cb("ocr_page", warning=wi)
         warnings.extend(w)
         status = "ok" if text else "warning"
         ingested.append(IngestedText(relative_path=filename, kind="epub", text=text, status="ok" if text else "skipped", warning="; ".join(w) if w else None))
         extracted_files.append({"relative_path": filename, "kind": "epub", "chars": len(text), "status": status, "warning": "; ".join(w) if w else None})
         detected = source_type = "epub"
     elif ext in IMAGE_EXTENSIONS:
-        _cb("page_scan", total_pages=1)
         image_path = temp_root / filename
         image_path.write_bytes(raw)
-        _cb("ocr_page", page=1, total_pages=1)
         text, w = extract_image_text(image_path)
         warnings.extend(w)
         status = "ok" if text else "warning"
@@ -403,7 +384,6 @@ def ingest_uploaded_file(
         extracted_files.append({"relative_path": filename, "kind": "image", "chars": len(text), "status": status, "warning": "; ".join(w) if w else None})
         detected = source_type = "image"
     else:
-        _cb("unpack")
         detected = source_type = "archive"
         archive_path = temp_root / filename
         archive_path.write_bytes(raw)
@@ -414,14 +394,8 @@ def ingest_uploaded_file(
         warnings.extend(collect_warnings)
         extracted_files.extend(manifest_entries)
 
-        # Determine how many image/epub files we have for progress tracking
-        image_files = [p for p in supported_paths if p.suffix.lower() in IMAGE_EXTENSIONS]
-        total_pages = len(image_files) if image_files else len(supported_paths)
-        _cb("page_scan", total_pages=total_pages)
-
         entry_by_path = {entry["relative_path"]: entry for entry in extracted_files}
         extracted_root = temp_root / "extracted"
-        processed_count = 0
         for path in sorted(supported_paths):
             rel_key = str(path.relative_to(extracted_root)).replace("\\", "/")
             rel_entry = entry_by_path.get(rel_key)
@@ -435,18 +409,13 @@ def ingest_uploaded_file(
                 text = load_text_file(path)
                 rel_entry["kind"] = "txt"
             elif pext == ".epub":
-                _cb("ocr_page", page=processed_count + 1, total_pages=total_pages)
                 text, proc_warnings = extract_epub_text(path)
                 rel_entry["kind"] = "epub"
             elif pext in IMAGE_EXTENSIONS:
-                processed_count += 1
-                _cb("ocr_page", page=processed_count, total_pages=total_pages)
                 text, proc_warnings = extract_image_text(path)
                 rel_entry["kind"] = "image"
 
             warnings.extend(proc_warnings)
-            for wi in proc_warnings:
-                _cb("ocr_page", page=processed_count, total_pages=total_pages, warning=wi)
             rel_entry["chars"] = len(text)
             rel_entry["status"] = "ok" if text else "warning"
             rel_entry["warning"] = "; ".join(proc_warnings) if proc_warnings else None
@@ -461,9 +430,7 @@ def ingest_uploaded_file(
                 )
             )
 
-    _cb("text_merge")
     combined = build_combined_text(ingested)
-    _cb("normalize")
     normalized_filename = "uploaded_normalized.txt"
     save_project_text(project_dir, combined, filename=normalized_filename)
 
