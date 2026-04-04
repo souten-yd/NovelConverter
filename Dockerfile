@@ -50,6 +50,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     # HuggingFace cache → /workspace for RunPod persistence
     HF_HOME=/workspace/hf_cache \
     TRANSFORMERS_CACHE=/workspace/hf_cache \
+    # Skip PaddleX online model-source probe to reduce cold-start latency
+    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
     LD_LIBRARY_PATH=/opt/llama-cpp/lib:${LD_LIBRARY_PATH} \
     # NDLOCR-Lite model directory (persistent RunPod storage)
     NDLOCR_MODEL_DIR=/workspace/ndlocr_models
@@ -139,14 +141,20 @@ COPY requirements_docker.txt .
 RUN pip install --no-cache-dir -r requirements_docker.txt
 
 # ── NDLOCR-Lite (NDL Japanese OCR – installed from GitHub) ───────────────────
-# The pip package installs the CLI binary; model weights are NOT bundled.
+# The pip package installs the NDLOCR-Lite CLI; model weights are NOT bundled.
 # Models are downloaded at container startup by entrypoint.sh and stored in
 # NDLOCR_MODEL_DIR (/workspace/ndlocr_models) which is a RunPod persistent
 # volume – so they survive Pod restarts without re-downloading.
 RUN pip install --no-cache-dir \
-      git+https://github.com/ndl-lab/ndlocr_cli.git \
-    && echo "[Dockerfile] NDLOCR-Lite CLI installed" \
+      git+https://github.com/ndl-lab/ndlocr-lite.git \
+    && echo "[Dockerfile] NDLOCR-Lite installed" \
     || echo "WARNING: NDLOCR-Lite install failed – engine will report unavailable at runtime"
+
+# Build-time smoke test (non-fatal): verify import + CLI entrypoint.
+RUN python3 -c "import ocr; print('ndlocr-lite import ok')" \
+    && ndlocr-lite --help >/dev/null 2>&1 \
+    && echo "[Dockerfile] NDLOCR-Lite smoke test passed" \
+    || echo "WARNING: NDLOCR-Lite smoke test failed"
 
 # Create placeholder model dir at image build time.
 # The actual model files are downloaded to /workspace/ndlocr_models at runtime
