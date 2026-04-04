@@ -32,9 +32,18 @@ protobuf>=4.25.0
 pillow>=10.0.0
 pytesseract>=0.3.10
 
-# ── Optional OCR engines (uncomment to enable) ───────────────────────────────
-# paddleocr>=2.7.0    # PaddleOCR (also needs paddlepaddle-gpu)
-# ndlocr-cli           # NDLOCR-Lite
+# ── PaddleOCR ─────────────────────────────────────────────────────────────────
+# paddlepaddle-gpu is installed separately in the Dockerfile RUN block
+# (version must match the CUDA version; see Dockerfile for details)
+paddleocr>=2.7.0
+
+# ── Qwen-VL local inference ───────────────────────────────────────────────────
+# transformers / torch already included above; qwen-vl-utils adds vision helpers
+qwen-vl-utils
+
+# ── NDLOCR-Lite ───────────────────────────────────────────────────────────────
+# Installed from GitHub in the Dockerfile RUN block below (not on PyPI).
+# Runtime dependency: torch (already included) + model weights (downloaded on first use)
 
 # ── EPUB parsing ──────────────────────────────────────────────────────────────
 ebooklib>=0.18

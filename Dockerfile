@@ -13,6 +13,9 @@ ARG DATA_DIR=/workspace/data
 # ── Environment ───────────────────────────────────────────────────────────────
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=UTC \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONIOENCODING=utf-8 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -57,21 +60,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     tar \
     ffmpeg \
+    # Tesseract OCR
     tesseract-ocr \
     tesseract-ocr-jpn \
     tesseract-ocr-jpn-vert \
     tesseract-ocr-eng \
+    # Archive support
     unrar-free \
     p7zip-full \
     libarchive-tools \
+    # Audio
     libsndfile1 \
     libsndfile1-dev \
+    # Build tools
     build-essential \
+    # Python
     python${PYTHON_VERSION} \
     python${PYTHON_VERSION}-dev \
     python${PYTHON_VERSION}-venv \
     python3-pip \
+    # Process manager
     supervisor \
+    # OpenCV / PaddleOCR dependencies
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    libgomp1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -109,10 +125,21 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTH
     && update-alternatives --install /usr/bin/python  python  /usr/bin/python${PYTHON_VERSION} 1 \
     && python3 -m pip install --upgrade pip
 
+# ── PaddleOCR GPU backend ─────────────────────────────────────────────────────
+# Install paddlepaddle-gpu matching CUDA 12.x; fall back to CPU if unavailable
+RUN pip install --no-cache-dir paddlepaddle-gpu \
+      -f https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html \
+    || pip install --no-cache-dir paddlepaddle
+
 # ── Python dependencies (single venv = system site-packages) ─────────────────
 WORKDIR ${APP_DIR}
 COPY requirements_docker.txt .
 RUN pip install --no-cache-dir -r requirements_docker.txt
+
+# ── NDLOCR-Lite (NDL Japanese OCR – installed from GitHub) ───────────────────
+RUN pip install --no-cache-dir \
+      git+https://github.com/ndl-lab/ndlocr_cli.git \
+    || echo "WARNING: NDLOCR-Lite install failed – engine will report unavailable at runtime"
 
 # ── Application code ──────────────────────────────────────────────────────────
 COPY app/        ${APP_DIR}/app/
