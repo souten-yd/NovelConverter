@@ -132,9 +132,9 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTH
 
 # ── PaddleOCR GPU backend ─────────────────────────────────────────────────────
 # Install paddlepaddle-gpu matching CUDA 12.x; fall back to CPU if unavailable
-RUN pip install --no-cache-dir paddlepaddle-gpu \
+RUN pip install --no-cache-dir "paddlepaddle-gpu>=3.0.0,<4.0.0" \
       -f https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html \
-    || pip install --no-cache-dir paddlepaddle
+    || pip install --no-cache-dir "paddlepaddle>=3.0.0,<4.0.0"
 
 # ── Python dependencies (single venv = system site-packages) ─────────────────
 WORKDIR ${APP_DIR}
@@ -143,9 +143,9 @@ RUN pip install --no-cache-dir -r requirements_docker.txt
 
 # ── NDLOCR-Lite (NDL Japanese OCR – installed from GitHub) ───────────────────
 # The pip package installs the NDLOCR-Lite CLI; model weights are NOT bundled.
-# Models are downloaded at container startup by entrypoint.sh and stored in
-# NDLOCR_MODEL_DIR (/workspace/ndlocr_models) which is a RunPod persistent
-# volume – so they survive Pod restarts without re-downloading.
+# Models must be manually downloaded to NDLOCR_MODEL_DIR (/workspace/ndlocr_models).
+# Use: python3 scripts/download_ndlocr_models.py
+# The directory is on a RunPod persistent volume so models survive Pod restarts.
 RUN pip install --no-cache-dir \
       git+https://github.com/ndl-lab/ndlocr-lite.git \
     && echo "[Dockerfile] NDLOCR-Lite installed" \

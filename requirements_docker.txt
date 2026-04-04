@@ -35,7 +35,8 @@ pytesseract>=0.3.10
 # ── PaddleOCR ─────────────────────────────────────────────────────────────────
 # paddlepaddle-gpu is installed separately in the Dockerfile RUN block
 # (version must match the CUDA version; see Dockerfile for details)
-paddleocr>=2.7.0
+paddleocr>=3.0.0,<4.0.0
+paddlex>=3.0.0,<4.0.0
 
 # ── Qwen-VL local inference ───────────────────────────────────────────────────
 # transformers / torch already included above; qwen-vl-utils adds vision helpers

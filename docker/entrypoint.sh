@@ -178,6 +178,23 @@ try:
 except ImportError as e:
     print(f"  [MISSING] paddlepaddle: {e}", file=sys.stderr)
 
+try:
+    import paddlex
+    paddlex_version = getattr(paddlex, "__version__", "unknown")
+    print(f"  [ok]      paddlex (version={paddlex_version})")
+except ImportError:
+    print(f"  [info]    paddlex: not installed (optional)")
+
+# Check CUDA availability for PaddlePaddle
+try:
+    import paddle
+    if hasattr(paddle, "is_compiled_with_cuda"):
+        print(f"  [info]    CUDA compiled: {paddle.is_compiled_with_cuda()}")
+    if hasattr(paddle, "device") and hasattr(paddle.device, "get_device"):
+        print(f"  [info]    device: {paddle.device.get_device()}")
+except Exception:
+    pass
+
 # Check that show_log is NOT required (version compatibility guard)
 try:
     import inspect
@@ -190,6 +207,21 @@ try:
 except Exception as e:
     print(f"  [info]    Could not inspect PaddleOCR signature: {e}")
 PADDLECHECK
+
+# ── PaddleOCR model cache integrity check ───────────────────────────────────
+# PP-LCNet_x1_0_doc_ori is used by PaddleX's document orientation classifier.
+# If the directory exists but inference.yml is missing, the cache is incomplete
+# and will cause PaddleOCR initialization to fail. Delete it so PaddleOCR can
+# re-download cleanly on first use.
+PADDLE_MODELS_BASE="/root/.paddlex/official_models"
+for model_name in PP-LCNet_x1_0_doc_ori PP-ShiTuV2_det PP-ShiTuV2_rec; do
+    model_dir="${PADDLE_MODELS_BASE}/${model_name}"
+    if [ -d "${model_dir}" ] && [ ! -f "${model_dir}/inference.yml" ]; then
+        echo "[entrypoint] WARNING: Incomplete PaddleX model cache: ${model_dir} (missing inference.yml)"
+        echo "[entrypoint]   Removing incomplete directory for automatic re-download"
+        rm -rf "${model_dir}"
+    fi
+done
 
 # ── NDLOCR-Lite: model download & diagnostics ─────────────────────────────────
 echo "[entrypoint] NDLOCR-Lite diagnostics:"
@@ -236,62 +268,11 @@ if [ -n "${NDLOCR_BIN}" ]; then
     if [ "${model_count}" -gt 0 ]; then
         echo "[entrypoint] NDLOCR-Lite: ${model_count} model file(s) already present in ${NDLOCR_MODEL_DIR} – skipping download"
     else
-        echo "[entrypoint] NDLOCR-Lite: No model files found in ${NDLOCR_MODEL_DIR}. Attempting model setup..."
-        python3 - <<NDLSETUP
-import os, sys, subprocess, shutil
-
-model_dir = os.environ.get("NDLOCR_MODEL_DIR", "/workspace/ndlocr_models")
-os.makedirs(model_dir, exist_ok=True)
-
-# Try ndlocr's own model-download mechanism if it exists.
-# Different versions expose this differently; we probe several approaches.
-downloaded = False
-
-# Approach 1: ndlocr package may expose a download_models() function
-try:
-    import ndlocr
-    for fn_name in ("download_models", "setup_model", "download"):
-        fn = getattr(ndlocr, fn_name, None)
-        if fn is not None:
-            print(f"[entrypoint] NDLOCR-Lite: calling ndlocr.{fn_name}(model_dir={model_dir!r})")
-            fn(model_dir)
-            downloaded = True
-            break
-except Exception as exc:
-    print(f"[entrypoint] NDLOCR-Lite: package-level model download failed: {exc}")
-
-# Approach 2: NDLOCR-Lite CLI flags
-if not downloaded:
-    binary = shutil.which("ndlocr-lite") or shutil.which("ndlocr")
-    for flag in ("--download-model", "--setup", "--init"):
-        try:
-            proc = subprocess.run(
-                [binary, flag, "--model_path", model_dir],
-                capture_output=True, text=True, timeout=300,
-            )
-            if proc.returncode == 0:
-                print(f"[entrypoint] NDLOCR-Lite: model download via {flag} succeeded")
-                downloaded = True
-                break
-            else:
-                stderr = (proc.stderr or "").strip()[:200]
-                print(f"[entrypoint] NDLOCR-Lite: {flag} returned rc={proc.returncode}: {stderr}")
-        except subprocess.TimeoutExpired:
-            print(f"[entrypoint] NDLOCR-Lite: {flag} timed out")
-        except Exception as exc:
-            print(f"[entrypoint] NDLOCR-Lite: {flag} error: {exc}")
-
-if not downloaded:
-    print(
-        "[entrypoint] WARNING: NDLOCR-Lite model auto-download could not be completed.\\n"
-        f"  Please manually download models to: {model_dir}\\n"
-        "  See: https://github.com/ndl-lab/ndlocr-lite for instructions."
-    )
-else:
-    count = sum(1 for _ in __import__("pathlib").Path(model_dir).rglob("*")
-                if _.is_file())
-    print(f"[entrypoint] NDLOCR-Lite: model download complete ({count} files in {model_dir})")
-NDLSETUP
+        echo "[entrypoint] WARNING: NDLOCR-Lite: No model files found in ${NDLOCR_MODEL_DIR}."
+        echo "[entrypoint]   Models are NOT bundled with ndlocr-lite and must be downloaded separately."
+        echo "[entrypoint]   Run: python3 scripts/download_ndlocr_models.py"
+        echo "[entrypoint]   Or manually download from https://github.com/ndl-lab/ndlocr-lite"
+        echo "[entrypoint]   NDLOCR-Lite engine will report unavailable until models are present."
     fi
 else
     echo "[entrypoint] WARNING: NDLOCR-Lite CLI not found – NDLOCR-Lite engine will be unavailable"

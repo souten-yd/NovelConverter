@@ -121,8 +121,27 @@ def paddleocr_status():
     )
     version = _get_paddleocr_version()
     init_error = PaddleOCREngine._init_error
+
+    paddle_version = "unknown"
+    paddlex_version = "unknown"
+    cuda_available = False
+    try:
+        import paddle
+        paddle_version = getattr(paddle, "__version__", "unknown")
+        cuda_available = getattr(paddle, "is_compiled_with_cuda", lambda: False)()
+    except ImportError:
+        pass
+    try:
+        import paddlex
+        paddlex_version = getattr(paddlex, "__version__", "unknown")
+    except ImportError:
+        pass
+
     return {
-        "version": version,
+        "paddleocr_version": version,
+        "paddlepaddle_version": paddle_version,
+        "paddlex_version": paddlex_version,
+        "cuda_available": cuda_available,
         "instance_ready": PaddleOCREngine._ocr_instance is not None,
         "init_error": init_error,
         "runtime_ready": init_error is None,
