@@ -4,7 +4,7 @@ NDLOCR-Lite is the National Diet Library's Japanese OCR engine.
 It is strong on vertical Japanese text and historical documents.
 
 Installation:
-  pip install git+https://github.com/ndl-lab/ndlocr_cli.git
+  pip install git+https://github.com/ndl-lab/ndlocr-lite.git
 
 Model storage:
   Models are NOT included in the pip package and must be downloaded separately.
@@ -12,8 +12,8 @@ Model storage:
   The entrypoint.sh startup script will attempt to download them automatically.
 
 Availability criteria (all must pass):
-  1. ndlocr CLI binary is in PATH
-  2. ndlocr --help runs without error (CLI is functional)
+  1. NDLOCR-Lite CLI binary is in PATH (ndlocr-lite preferred, ndlocr fallback)
+  2. CLI --help runs without error (CLI is functional)
   3. NDLOCR_MODEL_DIR exists and contains at least one model file
 """
 from __future__ import annotations
@@ -46,20 +46,20 @@ def _get_model_dir() -> Path:
 
 
 def _ndlocr_binary() -> Optional[str]:
-    """Return full path to the ndlocr CLI binary, or None if not found."""
-    return shutil.which("ndlocr")
+    """Return NDLOCR-Lite CLI path (ndlocr-lite preferred, ndlocr fallback)."""
+    return shutil.which("ndlocr-lite") or shutil.which("ndlocr")
 
 
 def _check_cli_functional() -> tuple[bool, str]:
-    """Verify ndlocr CLI is installed and responds to --help.
+    """Verify NDLOCR-Lite CLI is installed and responds to --help.
 
     Returns (ok, error_message).
     """
     binary = _ndlocr_binary()
     if binary is None:
         return False, (
-            "ndlocr コマンドが見つかりません。"
-            "pip install git+https://github.com/ndl-lab/ndlocr_cli.git"
+            "NDLOCR-Lite CLI が見つかりません。"
+            "pip install git+https://github.com/ndl-lab/ndlocr-lite.git"
         )
 
     try:
@@ -74,15 +74,15 @@ def _check_cli_functional() -> tuple[bool, str]:
         if proc.returncode not in (0, 1):
             stderr = (proc.stderr or "").strip()[:300]
             return False, (
-                f"ndlocr --help が異常終了しました (rc={proc.returncode}): {stderr}"
+                f"NDLOCR-Lite --help が異常終了しました (rc={proc.returncode}): {stderr}"
             )
         return True, ""
     except FileNotFoundError:
-        return False, f"ndlocr バイナリが見つかりません: {binary}"
+        return False, f"NDLOCR-Lite バイナリが見つかりません: {binary}"
     except subprocess.TimeoutExpired:
-        return False, "ndlocr --help がタイムアウトしました (CLI が壊れている可能性があります)"
+        return False, "NDLOCR-Lite --help がタイムアウトしました (CLI が壊れている可能性があります)"
     except Exception as exc:
-        return False, f"ndlocr CLI 確認中にエラーが発生しました: {exc}"
+        return False, f"NDLOCR-Lite CLI 確認中にエラーが発生しました: {exc}"
 
 
 def _check_model_files() -> tuple[bool, str]:
@@ -137,8 +137,8 @@ def get_ndlocr_status() -> dict:
     errors = []
     if not installed:
         errors.append(
-            "ndlocr コマンドが PATH にありません "
-            "(pip install git+https://github.com/ndl-lab/ndlocr_cli.git)"
+            "NDLOCR-Lite CLI が PATH にありません "
+            "(pip install git+https://github.com/ndl-lab/ndlocr-lite.git)"
         )
     elif not cli_ok:
         errors.append(f"CLI 動作確認失敗: {cli_err}")
@@ -190,7 +190,7 @@ class NDLOCRLiteEngine(OCREngine):
             "system_packages": [],
             "notes": (
                 "NDLOCR-Lite は GitHub からインストール: "
-                "pip install git+https://github.com/ndl-lab/ndlocr_cli.git  "
+                "pip install git+https://github.com/ndl-lab/ndlocr-lite.git  "
                 "モデルは初回起動時に NDLOCR_MODEL_DIR へ自動ダウンロードされます。"
             ),
             "status": status,

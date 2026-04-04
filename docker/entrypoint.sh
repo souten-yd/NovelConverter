@@ -105,6 +105,8 @@ echo "[entrypoint] Data dir: ${DATA_DIR:-/workspace/data}"
 echo "[entrypoint] HF cache: ${HF_HOME:-/workspace/hf_cache}"
 echo "[entrypoint] Mock mode: BASE=${TTS_BASE_USE_REAL:-false} CUSTOM=${TTS_CUSTOM_USE_REAL:-false} DESIGN=${TTS_DESIGN_USE_REAL:-false}"
 echo "[entrypoint] LLM API:   ${LLM_API_URL:-(not set, rule-based only)}"
+export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK="${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}"
+echo "[entrypoint] Paddle model source check disabled: ${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK}"
 ensure_llama_server_ready || true
 
 echo "[entrypoint] Runtime diagnostics:"
@@ -194,14 +196,36 @@ echo "[entrypoint] NDLOCR-Lite diagnostics:"
 NDLOCR_MODEL_DIR="${NDLOCR_MODEL_DIR:-/workspace/ndlocr_models}"
 echo "[entrypoint] NDLOCR model dir: ${NDLOCR_MODEL_DIR}"
 
-if command -v ndlocr >/dev/null 2>&1; then
-    echo "[entrypoint] NDLOCR-Lite: ndlocr command found at $(command -v ndlocr)"
+# Auto-install NDLOCR-Lite when missing (RunPod runtime recovery)
+if ! command -v ndlocr-lite >/dev/null 2>&1 && ! command -v ndlocr >/dev/null 2>&1; then
+    echo "[entrypoint] NDLOCR-Lite: CLI not found. Attempting runtime install..."
+    if python3 -m pip install --no-cache-dir git+https://github.com/ndl-lab/ndlocr-lite.git; then
+        hash -r
+        if command -v ndlocr-lite >/dev/null 2>&1 || command -v ndlocr >/dev/null 2>&1; then
+            echo "[entrypoint] NDLOCR-Lite: runtime install succeeded"
+        else
+            echo "[entrypoint] WARNING: NDLOCR-Lite runtime install completed but CLI is still missing"
+        fi
+    else
+        echo "[entrypoint] WARNING: NDLOCR-Lite runtime install failed"
+    fi
+fi
+
+NDLOCR_BIN=""
+if command -v ndlocr-lite >/dev/null 2>&1; then
+    NDLOCR_BIN="$(command -v ndlocr-lite)"
+elif command -v ndlocr >/dev/null 2>&1; then
+    NDLOCR_BIN="$(command -v ndlocr)"
+fi
+
+if [ -n "${NDLOCR_BIN}" ]; then
+    echo "[entrypoint] NDLOCR-Lite: CLI found at ${NDLOCR_BIN}"
 
     # Verify CLI is responsive
-    if ndlocr --help >/dev/null 2>&1; then
+    if "${NDLOCR_BIN}" --help >/dev/null 2>&1; then
         echo "[entrypoint] NDLOCR-Lite: CLI sanity check passed"
     else
-        echo "[entrypoint] WARNING: ndlocr --help failed – CLI may be broken"
+        echo "[entrypoint] WARNING: NDLOCR-Lite --help failed – CLI may be broken"
     fi
 
     # Ensure model directory exists
@@ -236,9 +260,9 @@ try:
 except Exception as exc:
     print(f"[entrypoint] NDLOCR-Lite: package-level model download failed: {exc}")
 
-# Approach 2: ndlocr CLI --download-model flag
+# Approach 2: NDLOCR-Lite CLI flags
 if not downloaded:
-    binary = shutil.which("ndlocr")
+    binary = shutil.which("ndlocr-lite") or shutil.which("ndlocr")
     for flag in ("--download-model", "--setup", "--init"):
         try:
             proc = subprocess.run(
@@ -261,7 +285,7 @@ if not downloaded:
     print(
         "[entrypoint] WARNING: NDLOCR-Lite model auto-download could not be completed.\\n"
         f"  Please manually download models to: {model_dir}\\n"
-        "  See: https://github.com/ndl-lab/ndlocr_cli for instructions."
+        "  See: https://github.com/ndl-lab/ndlocr-lite for instructions."
     )
 else:
     count = sum(1 for _ in __import__("pathlib").Path(model_dir).rglob("*")
@@ -270,8 +294,8 @@ else:
 NDLSETUP
     fi
 else
-    echo "[entrypoint] WARNING: ndlocr command not found – NDLOCR-Lite engine will be unavailable"
-    echo "[entrypoint]   To install: pip install git+https://github.com/ndl-lab/ndlocr_cli.git"
+    echo "[entrypoint] WARNING: NDLOCR-Lite CLI not found – NDLOCR-Lite engine will be unavailable"
+    echo "[entrypoint]   To install: pip install git+https://github.com/ndl-lab/ndlocr-lite.git"
 fi
 
 if [[ -x "${LLAMA_SERVER_BIN:-}" ]]; then
