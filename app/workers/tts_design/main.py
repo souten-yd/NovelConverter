@@ -50,8 +50,32 @@ def list_models():
 
 @app.post("/warmup")
 def warmup():
-    get_synth().warmup()
-    return {"status": "ok"}
+    synth = get_synth()
+    synth.warmup()
+    loaded = synth.is_loaded()
+    error = synth.get_load_error() if hasattr(synth, "get_load_error") else None
+    return {"status": "ok" if loaded else "error", "model_loaded": loaded, "error": error}
+
+
+@app.get("/model_status")
+def model_status():
+    synth = get_synth()
+    result = {
+        "worker_id": WORKER_ID,
+        "worker_type": WORKER_TYPE,
+        "use_real_model": USE_REAL_MODEL,
+        "model_loaded": synth.is_loaded(),
+    }
+    if hasattr(synth, "get_load_error"):
+        result["load_error"] = synth.get_load_error()
+    try:
+        from app.shared.model_manager import get_models_status
+        tts_status = get_models_status()
+        result["tokenizer_status"] = tts_status.get("tokenizer", {}).get("status", "unknown")
+        result["model_status"] = tts_status.get("design", {}).get("status", "unknown")
+    except Exception:
+        pass
+    return result
 
 
 @app.post("/synthesize", response_model=SynthesizeResponse)

@@ -158,3 +158,16 @@ def get_main_model():
     """Return the filename of the model marked as 'main', if any."""
     main = llm_manager.get_main_model()
     return {"main_model": main}
+
+
+@router.get("/refcount")
+def get_refcount():
+    """Return current LLM reference count status."""
+    return llm_manager.get_refcount_status()
+
+
+@router.post("/force_unload")
+def force_unload():
+    """Force-unload LLM regardless of reference count."""
+    llm_manager.force_unload()
+    return {"status": "unloaded", "refcount": llm_manager.get_refcount_status()}

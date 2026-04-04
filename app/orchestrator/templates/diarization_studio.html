@@ -42,6 +42,15 @@
         <p class="text-muted" style="font-size:0.75em;margin:0 0 0 24px">
           キャラクター辞書構築・候補絞り込み・整合性チェックを有効にします（低速・高精度）
         </p>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+          <input type="checkbox" id="useLlmPrimary" style="width:16px;height:16px;accent-color:#7c3aed">
+          <label for="useLlmPrimary" style="font-size:0.83em;font-weight:600;cursor:pointer;color:#6d28d9">
+            LLM主体話者推定を使用
+          </label>
+        </div>
+        <p class="text-muted" style="font-size:0.75em;margin:0 0 0 24px">
+          章単位でLLMが話者を推定します。最高精度ですが処理時間が長くなります
+        </p>
       </div>
 
       <!-- LLM Fallback mode selector -->
@@ -270,6 +279,11 @@ function getUseEnhancedPipeline() {
   return chk ? chk.checked : false;
 }
 
+function getUseLlmPrimary() {
+  const chk = document.getElementById('useLlmPrimary');
+  return chk ? chk.checked : false;
+}
+
 function renderLlmErrors(errors) {
   const panel = document.getElementById('llmErrorPanel');
   const countEl = document.getElementById('llmErrorCount');
@@ -403,12 +417,13 @@ async function runPreview() {
   const rules = getRuleStates();
   const llm_fallback_mode = getLlmFallbackMode();
   const use_enhanced_pipeline = getUseEnhancedPipeline();
+  const use_llm_primary = getUseLlmPrimary();
 
   try {
     const r = await fetch(`/api/projects/${projectId}/preview_diarization`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rules, llm_fallback_mode, use_enhanced_pipeline }),
+      body: JSON.stringify({ rules, llm_fallback_mode, use_enhanced_pipeline, use_llm_primary }),
     });
     if (!r.ok) {
       let errDetail = '';
@@ -518,6 +533,7 @@ async function saveResults() {
   const rules = getRuleStates();
   const llm_fallback_mode = getLlmFallbackMode();
   const use_enhanced_pipeline = getUseEnhancedPipeline();
+  const use_llm_primary = getUseLlmPrimary();
   const status = document.getElementById('previewStatus');
   status.textContent = '保存中...';
   document.getElementById('btnSave').disabled = true;
@@ -526,7 +542,7 @@ async function saveResults() {
     const r = await fetch(`/api/projects/${projectId}/segment_speakers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rules, llm_fallback_mode, use_enhanced_pipeline }),
+      body: JSON.stringify({ rules, llm_fallback_mode, use_enhanced_pipeline, use_llm_primary }),
     });
     const d = await r.json().catch(() => ({}));
     if (r.ok) {

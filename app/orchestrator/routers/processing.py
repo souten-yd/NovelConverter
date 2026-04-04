@@ -21,6 +21,7 @@ from app.orchestrator.services.preprocessor import preprocess, _normalize_whites
 from app.orchestrator.services.speaker_segmenter import (
     segment_speakers,
     segment_speakers_enhanced,
+    segment_speakers_llm_primary,
     build_speaker_list,
     AVAILABLE_RULES,
     DiarizationConfig,
@@ -165,8 +166,10 @@ class SegmentSpeakersRequest(BaseModel):
     rules: Optional[List[RuleSpecIn]] = None
     llm_fallback_mode: str = "on_error"  # disabled | on_error | always
     use_enhanced_pipeline: bool = False   # True → segment_speakers_enhanced()
+    use_llm_primary: bool = False         # True → segment_speakers_llm_primary()
     rebuild_char_dict: bool = True        # rebuild character dict before segmenting
     consistency_pass_threshold: float = 0.65
+    clean_ocr_with_llm: bool = False      # True → OCR text cleaned with LLM before segmenting
 
 
 def _build_config(body: Optional[SegmentSpeakersRequest]) -> Optional[DiarizationConfig]:
@@ -226,6 +229,7 @@ def segment_speakers_endpoint(
     job_id = job.id
 
     use_enhanced = bool(body and body.use_enhanced_pipeline)
+    use_llm_primary = bool(body and body.use_llm_primary)
 
     def _bg_segment():
         start_time = time.time()
@@ -240,13 +244,19 @@ def segment_speakers_endpoint(
             _update_seg_job(bg_db, job_id, "rule_based", "ルールベース分類中", 10, 0, total_segs)
             logger.info(
                 f"Speaker segmentation start: project={project_id} segments={total_segs} "
-                f"enhanced={use_enhanced}"
+                f"enhanced={use_enhanced} llm_primary={use_llm_primary}"
             )
 
             def _pcb(stage, pct, cur=0, total=0):
                 _update_seg_job(bg_db, job_id, stage, _seg_stage_label(stage), pct, cur, total)
 
-            if use_enhanced:
+            if use_llm_primary:
+                annotated, llm_errors = segment_speakers_llm_primary(
+                    raw_segments, config=config,
+                    project_id=project_id, db=bg_db,
+                    progress_cb=_pcb,
+                )
+            elif use_enhanced:
                 annotated, llm_errors = segment_speakers_enhanced(
                     raw_segments, config=config,
                     project_id=project_id, db=bg_db,
@@ -402,6 +412,7 @@ class PreviewDiarizationRequest(BaseModel):
     rules: List[RuleSpecIn]
     llm_fallback_mode: str = "on_error"  # disabled | on_error | always
     use_enhanced_pipeline: bool = False   # True → segment_speakers_enhanced()
+    use_llm_primary: bool = False         # True → segment_speakers_llm_primary()
     consistency_pass_threshold: float = 0.65
 
 
@@ -438,7 +449,14 @@ def preview_diarization(
         llm_fallback_mode=body.llm_fallback_mode,
     )
 
-    if body.use_enhanced_pipeline:
+    if body.use_llm_primary:
+        annotated, llm_errors = segment_speakers_llm_primary(
+            raw_segments,
+            config=config,
+            project_id=project_id,
+            db=db,
+        )
+    elif body.use_enhanced_pipeline:
         from app.orchestrator.services.character_builder import load_character_dict
         char_dict = load_character_dict(project_id, db)
         annotated, llm_errors = segment_speakers_enhanced(

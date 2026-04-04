@@ -35,13 +35,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     # Database
     DATABASE_URL=sqlite:////workspace/data/novelconverter.db \
     # TTS mode: set to "true" to load real Qwen3-TTS model
-    TTS_BASE_USE_REAL=false \
-    TTS_CUSTOM_USE_REAL=false \
-    TTS_DESIGN_USE_REAL=false \
-    # Model paths (override to use local weights)
-    TTS_BASE_MODEL_PATH=Qwen/Qwen3-TTS \
-    TTS_CUSTOM_MODEL_PATH=Qwen/Qwen3-TTS \
-    TTS_DESIGN_MODEL_PATH=Qwen/Qwen3-TTS \
+    TTS_BASE_USE_REAL=true \
+    TTS_CUSTOM_USE_REAL=true \
+    TTS_DESIGN_USE_REAL=true \
+    # Model paths – correct per-mode Qwen3-TTS variants
+    TTS_BASE_MODEL_PATH=Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+    TTS_CUSTOM_MODEL_PATH=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
+    TTS_DESIGN_MODEL_PATH=Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
+    TTS_TOKENIZER_PATH=Qwen/Qwen3-TTS-Tokenizer-12Hz \
     # LLM (optional – for speaker segmentation)
     LLM_API_URL="" \
     LLM_API_KEY="" \
