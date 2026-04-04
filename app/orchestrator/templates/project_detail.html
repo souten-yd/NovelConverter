@@ -8,6 +8,43 @@
   <span class="badge badge-{{ project.status }}">{{ project.status }}</span>
 </div>
 
+<!-- Model Status Panel -->
+<div id="modelStatusPanel" style="margin-bottom:16px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:0.85em">
+  <div style="font-weight:600;margin-bottom:8px">モデル状態</div>
+  <div id="modelStatusContent" style="display:flex;gap:16px;flex-wrap:wrap">
+    <span style="color:#64748b">読み込み中...</span>
+  </div>
+</div>
+<script>
+(async function loadModelStatus() {
+  try {
+    const r = await fetch('/api/system/models');
+    if (!r.ok) return;
+    const d = await r.json();
+    const el = document.getElementById('modelStatusContent');
+    if (!el) return;
+    let html = '';
+    // TTS models
+    const ttsModels = d.qwen3_tts || {};
+    for (const [key, info] of Object.entries(ttsModels)) {
+      const st = info.status || 'unknown';
+      const color = st === 'ok' ? '#16a34a' : st === 'incomplete' ? '#d97706' : '#dc2626';
+      const label = key === 'tokenizer' ? 'Tokenizer' : key === 'custom' ? 'CustomVoice' : key === 'design' ? 'VoiceDesign' : key === 'base' ? 'Base' : key;
+      html += `<span style="padding:2px 8px;border-radius:4px;border:1px solid ${color};color:${color}">${label}: ${st}</span>`;
+    }
+    // LLM
+    const llm = d.llm || {};
+    const llmColor = llm.ready ? '#16a34a' : '#dc2626';
+    html += `<span style="padding:2px 8px;border-radius:4px;border:1px solid ${llmColor};color:${llmColor}">LLM: ${llm.status || 'unknown'}</span>`;
+    // LLM runtime
+    const rt = d.llm_runtime || {};
+    const rtColor = rt.llm_status === 'running' ? '#16a34a' : rt.llm_status === 'loading' ? '#d97706' : '#64748b';
+    html += `<span style="padding:2px 8px;border-radius:4px;border:1px solid ${rtColor};color:${rtColor}">LLMサーバ: ${rt.llm_status || 'stopped'}</span>`;
+    el.innerHTML = html;
+  } catch(e) { console.warn('Model status load failed:', e); }
+})();
+</script>
+
 <div class="stats-row">
   <div class="stat-box">
     <div class="stat-value">{{ seg_count }}</div>

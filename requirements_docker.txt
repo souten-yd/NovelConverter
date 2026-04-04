@@ -53,5 +53,8 @@ lxml>=4.9.0
 # ── Archive extraction (RAR) ──────────────────────────────────────────────────
 rarfile>=4.1
 
+# ── HuggingFace Hub (model download) ─────────────────────────────────────────
+huggingface_hub>=0.23.0
+
 # ── Process manager ───────────────────────────────────────────────────────────
 supervisor>=4.2.0

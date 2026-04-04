@@ -185,3 +185,50 @@ def full_status() -> Dict[str, Any]:
         "workers": workers,
         "all_healthy": all_ok,
     }
+
+
+@app.get("/api/system/models")
+def system_models_status() -> Dict[str, Any]:
+    """Return status of all models: Qwen3-TTS + LLM."""
+    result: Dict[str, Any] = {}
+
+    # Qwen3-TTS models
+    try:
+        from app.shared.model_manager import get_models_status
+        result["qwen3_tts"] = get_models_status()
+    except Exception as e:
+        result["qwen3_tts"] = {"error": str(e)}
+
+    # LLM model
+    try:
+        from app.shared.llm_downloader import get_llm_status
+        result["llm"] = get_llm_status()
+    except Exception as e:
+        result["llm"] = {"error": str(e)}
+
+    # LLM runtime (llama-server)
+    try:
+        from app.orchestrator.services.llm_manager import get_refcount_status
+        result["llm_runtime"] = get_refcount_status()
+    except Exception as e:
+        result["llm_runtime"] = {"error": str(e)}
+
+    # TTS worker statuses
+    worker_urls = {
+        "tts_base":   os.environ.get("TTS_BASE_URL",   "http://localhost:8001"),
+        "tts_custom": os.environ.get("TTS_CUSTOM_URL", "http://localhost:8002"),
+        "tts_design": os.environ.get("TTS_DESIGN_URL", "http://localhost:8003"),
+    }
+    workers = {}
+    for name, url in worker_urls.items():
+        try:
+            r = requests.get(f"{url}/model_status", timeout=5)
+            if r.status_code == 200:
+                workers[name] = r.json()
+            else:
+                workers[name] = {"error": f"HTTP {r.status_code}"}
+        except Exception as e:
+            workers[name] = {"error": str(e)}
+    result["tts_workers"] = workers
+
+    return result

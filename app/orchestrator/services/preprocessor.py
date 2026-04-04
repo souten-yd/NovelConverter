@@ -59,11 +59,15 @@ def _detect_monologue_hint(text: str) -> Optional[str]:
 def preprocess(
     raw_text: str,
     normalizer_fn: Optional[Callable[[str], Tuple[str, list]]] = None,
+    clean_with_llm: bool = False,
 ) -> Tuple[List[RawSegment], list]:
     """Full preprocessing pipeline. Returns (segments, normalization_log_entries).
 
     normalizer_fn: optional callable(str) -> (normalized_str, list[NormalizationEntry]).
     When not supplied the legacy _normalize_whitespace() is used and no log is produced.
+
+    clean_with_llm: if True, runs OCR noise cleaning (rule-based + LLM) before
+    chapter splitting. Requires LLM to be available for the LLM pass.
     """
     raw_chars = len(raw_text)
     raw_lines = raw_text.count("\n") + (1 if raw_text else 0)
@@ -71,6 +75,22 @@ def preprocess(
     logger.info(
         f"Preprocess stage[input]: chars={raw_chars}, lines={raw_lines}, trimmed_chars={trimmed_chars}"
     )
+
+    # OCR cleaning (rule-based always, LLM optional)
+    ocr_cleaning_result = None
+    try:
+        from app.orchestrator.services.ocr_cleaner import clean_ocr_text_with_llm
+        ocr_cleaning_result = clean_ocr_text_with_llm(
+            raw_text, mode="novel", use_llm=clean_with_llm,
+        )
+        raw_text = ocr_cleaning_result.cleaned_text
+        if ocr_cleaning_result.removed_spans:
+            logger.info(
+                f"Preprocess stage[ocr_clean]: removed {len(ocr_cleaning_result.removed_spans)} spans, "
+                f"quality={ocr_cleaning_result.quality_flags}"
+            )
+    except Exception as e:
+        logger.warning(f"Preprocess stage[ocr_clean]: skipped due to error: {e}")
 
     norm_logs: list = []
     if normalizer_fn is not None:

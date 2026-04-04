@@ -98,6 +98,11 @@ AVAILABLE_RULES: dict[str, dict] = {
         "description": "「〜と思った」などのパターンで独白(monologue)を検出します",
         "params": {},
     },
+    "llm_primary": {
+        "label": "LLM主体話者推定",
+        "description": "LLMを主体とした章単位の話者推定を行います（高精度、低速）",
+        "params": {},
+    },
 }
 
 DEFAULT_RULE_ORDER = list(AVAILABLE_RULES.keys())
@@ -855,6 +860,93 @@ def segment_speakers_enhanced(
 
     _cb("complete", 100, total_segs, total_segs)
     return annotated, llm_errors
+
+
+def segment_speakers_llm_primary(
+    raw_segments: List[RawSegment],
+    config: Optional[DiarizationConfig] = None,
+    known_characters: Optional[List[str]] = None,
+    project_id: Optional[str] = None,
+    db=None,
+    progress_cb=None,
+) -> tuple[List[AnnotatedSegment], List[dict]]:
+    """LLM-primary chapter-unit speaker inference pipeline.
+
+    This is a new mode that uses LLM as the primary speaker inference engine,
+    processing text chapter by chapter for better context utilization.
+    Falls back to rule-based if LLM is unavailable.
+    """
+    from app.orchestrator.services.llm_speaker_inference import run_llm_speaker_pipeline
+
+    def _cb(stage: str, pct: int, cur: int = 0, total: int = 0) -> None:
+        if progress_cb is not None:
+            try:
+                progress_cb(stage, pct, cur, total)
+            except Exception:
+                pass
+
+    llm_errors: List[dict] = []
+
+    # Reconstruct full text from raw segments
+    full_text = "\n".join(seg.normalized_text or seg.raw_text for seg in raw_segments)
+
+    # Extract known character names from segments if not provided
+    if not known_characters:
+        known_characters = list({
+            seg.predicted_speaker
+            for seg in raw_segments
+            if hasattr(seg, "predicted_speaker")
+            and seg.predicted_speaker not in ("unknown", "narrator", "protagonist", "")
+        })
+
+    _cb("llm_pipeline_start", 5, 0, len(raw_segments))
+
+    try:
+        def pipeline_progress(stage, detail):
+            _cb(stage, 50, 0, len(raw_segments))
+
+        segment_dicts = run_llm_speaker_pipeline(
+            text=full_text,
+            known_characters=known_characters,
+            progress_callback=pipeline_progress,
+        )
+
+        # Convert dicts to AnnotatedSegment
+        annotated: List[AnnotatedSegment] = []
+        for sd in segment_dicts:
+            annotated.append(AnnotatedSegment(
+                chapter_index=sd.get("chapter_index", 0),
+                order_index=sd.get("order_index", 0),
+                raw_text=sd.get("raw_text", ""),
+                normalized_text=sd.get("normalized_text", ""),
+                segment_type=sd.get("segment_type", "narration"),
+                predicted_speaker=sd.get("predicted_speaker", "unknown"),
+                confidence=sd.get("confidence", 0.0),
+                reason=sd.get("reason", ""),
+                is_chapter_header=sd.get("is_chapter_header", False),
+                candidates=sd.get("candidates", []),
+                needs_review=sd.get("needs_review", False),
+                evidence_spans=sd.get("evidence_spans", []),
+            ))
+
+        _cb("complete", 100, len(annotated), len(annotated))
+        return annotated, llm_errors
+
+    except Exception as e:
+        logger.error(f"LLM-primary pipeline failed, falling back to enhanced: {e}")
+        llm_errors.append({
+            "batch_order_indices": [],
+            "exception_type": type(e).__name__,
+            "message": str(e),
+            "raw_response_excerpt": "",
+        })
+
+        # Fallback to enhanced pipeline
+        return segment_speakers_enhanced(
+            raw_segments, config=config,
+            project_id=project_id, db=db,
+            progress_cb=progress_cb,
+        )
 
 
 def _make_enhanced_config(config: Optional[DiarizationConfig]) -> DiarizationConfig:

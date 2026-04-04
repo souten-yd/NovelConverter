@@ -318,6 +318,35 @@ else
 fi
 echo ""
 
+# ── Qwen3-TTS model preparation ─────────────────────────────────────────────
+echo "[entrypoint] Preparing Qwen3-TTS models..."
+cd "${APP_DIR:-/workspace/NovelConverter}" 2>/dev/null || true
+python3 -c "
+import sys
+try:
+    from app.shared.model_manager import ensure_all_models
+    status = ensure_all_models()
+    for k, v in status.items():
+        tag = 'ok' if v else 'FAILED'
+        print(f'  [entrypoint] Qwen3-TTS {k}: {tag}')
+    if not all(status.values()):
+        print('  [entrypoint] WARNING: Some Qwen3-TTS models failed to download', file=sys.stderr)
+except Exception as e:
+    print(f'  [entrypoint] Model preparation error: {e}', file=sys.stderr)
+" 2>&1 || echo "[entrypoint] WARNING: Model preparation script failed"
+
+# ── LLM (Gemma GGUF) preparation ────────────────────────────────────────────
+echo "[entrypoint] Preparing LLM model..."
+python3 -c "
+import sys
+try:
+    from app.shared.llm_downloader import ensure_llm_model
+    path = ensure_llm_model()
+    print(f'  [entrypoint] LLM model: {path}')
+except Exception as e:
+    print(f'  [entrypoint] LLM download error: {e}', file=sys.stderr)
+" 2>&1 || echo "[entrypoint] WARNING: LLM preparation script failed"
+
 # ── If CMD args supplied, run those instead ───────────────────────────────────
 if [[ $# -gt 0 ]]; then
     exec "$@"
