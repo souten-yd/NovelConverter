@@ -35,7 +35,27 @@ def get_db():
         db.close()
 
 
+def _migrate_columns(eng) -> None:
+    """Add new columns to existing tables if they don't exist yet (SQLite-safe)."""
+    from sqlalchemy import text
+    migrations = [
+        ("segments", "candidates",        "TEXT DEFAULT '[]'"),
+        ("segments", "evidence_spans",    "TEXT DEFAULT '[]'"),
+        ("segments", "needs_review",      "INTEGER DEFAULT 0"),
+        ("segments", "monologue_subtype", "TEXT"),
+        ("segments", "rule_log",          "TEXT DEFAULT '[]'"),
+    ]
+    with eng.connect() as conn:
+        for table, col, col_def in migrations:
+            try:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}"))
+                conn.commit()
+            except Exception:
+                pass  # column already exists – safe to ignore
+
+
 def init_db():
     from app.shared import models  # noqa: F401 – registers models
 
     Base.metadata.create_all(bind=engine)
+    _migrate_columns(engine)

@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.shared.database import get_db
-from app.shared.models import Project, Segment, Speaker, RenderJob, Artifact, VoiceProfile
+from app.shared.models import Project, Segment, Speaker, RenderJob, Artifact, VoiceProfile, CharacterMaster
 from app.shared.paths import get_data_dir
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
@@ -64,9 +64,31 @@ def segments_page(project_id: str, request: Request, db: Session = Depends(get_d
         .order_by(Segment.chapter_index, Segment.order_index)
         .all()
     )
+    # Gather unique speaker names for dropdown (predicted + final + character master)
+    speaker_name_set = set()
+    for seg in segments:
+        if seg.predicted_speaker and seg.predicted_speaker not in ("unknown", "narrator", ""):
+            speaker_name_set.add(seg.predicted_speaker)
+        if seg.final_speaker and seg.final_speaker not in ("unknown", "narrator", ""):
+            speaker_name_set.add(seg.final_speaker)
+    # Add from character master if available
+    chars = db.query(CharacterMaster).filter(CharacterMaster.project_id == project_id).all()
+    for c in chars:
+        speaker_name_set.add(c.canonical_name)
+        for alias in (c.aliases or []):
+            speaker_name_set.add(alias)
+    speaker_names = sorted(speaker_name_set)
+
+    needs_review_count = sum(1 for s in segments if s.needs_review)
+
     return templates.TemplateResponse(
         request, "segments.html",
-        {"project": project, "segments": segments},
+        {
+            "project": project,
+            "segments": segments,
+            "speaker_names": speaker_names,
+            "needs_review_count": needs_review_count,
+        },
     )
 
 

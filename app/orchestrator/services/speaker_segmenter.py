@@ -3,6 +3,13 @@
 Supports a configurable DiarizationConfig so users can pick/combine rules
 interactively (diarization studio). Falls back to the default pipeline when
 no config is supplied (backwards compatible).
+
+v2 enhanced pipeline adds:
+  - monologue_detection rule
+  - candidate generation per segment
+  - constrained JSON LLM prompt with retry
+  - global consistency 2nd pass
+  - AnnotatedSegment extended with candidates/evidence_spans/needs_review/rule_log
 """
 from __future__ import annotations
 
@@ -10,7 +17,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import requests
 
@@ -27,11 +34,18 @@ class AnnotatedSegment:
     order_index: int
     raw_text: str
     normalized_text: str
-    segment_type: str  # narration / dialogue / thought / unknown
+    segment_type: str  # narration / dialogue / thought / monologue / unknown
     predicted_speaker: str
     confidence: float
     reason: str
     is_chapter_header: bool = False
+    # Enhanced pipeline fields (all have defaults → backward compatible)
+    monologue_subtype: Optional[str] = None              # "inner" | None
+    candidates: List[dict] = field(default_factory=list) # CandidateSpeaker dicts
+    evidence_spans: List[str] = field(default_factory=list)
+    needs_review: bool = False
+    rule_log: List[dict] = field(default_factory=list)   # [{"rule": str, "fired": bool}]
+    character_id: Optional[str] = None                   # FK to character_master.id
 
 
 # ── Rule catalogue ─────────────────────────────────────────────────────────────
@@ -78,6 +92,11 @@ AVAILABLE_RULES: dict[str, dict] = {
                 "step": 0.05,
             },
         },
+    },
+    "monologue_detection": {
+        "label": "独白・心内語検出",
+        "description": "「〜と思った」などのパターンで独白(monologue)を検出します",
+        "params": {},
     },
 }
 
@@ -133,25 +152,53 @@ def _build_narr_re(keywords: list[str]) -> re.Pattern:
     return re.compile("(" + "|".join(escaped) + ")", re.IGNORECASE)
 
 
+_MONOLOGUE_DETECT_RE = re.compile(
+    r"(〜?と思った|〜?と考えた|〜?と感じた|心の中で|心中で|胸の内で"
+    r"|と心の中で|心の奥で|頭の中で|脳裏に|胸の中で"
+    r"|と思う|と考える|と感じる|と悟った|と気づいた)"
+)
+
+
 def _rule_based_classify(
     text: str,
     *,
     use_dialogue: bool = True,
     use_thought: bool = True,
+    use_monologue: bool = False,
     narr_re: Optional[re.Pattern] = None,
-) -> tuple[str, float]:
-    """Return (segment_type, confidence)."""
+) -> tuple[str, float, Optional[str], List[dict]]:
+    """Return (segment_type, confidence, monologue_subtype, rule_log)."""
     t = text.strip()
+    rule_log: List[dict] = []
+
+    # Dialogue bracket (full match)
     if use_dialogue and _DIALOGUE_RE.match(t):
-        return "dialogue", 0.85
+        rule_log.append({"rule": "dialogue_brackets_full", "fired": True})
+        return "dialogue", 0.85, None, rule_log
+
+    # Thought bracket
     if use_thought and _THOUGHT_RE.match(t):
-        return "thought", 0.80
+        rule_log.append({"rule": "thought_brackets", "fired": True})
+        return "thought", 0.80, None, rule_log
+
+    # Monologue detection (inner thought without brackets)
+    if use_monologue and _MONOLOGUE_DETECT_RE.search(t):
+        rule_log.append({"rule": "monologue_detection", "fired": True})
+        return "monologue", 0.72, "inner", rule_log
+
+    # Dialogue bracket (partial / nested)
     if use_dialogue and ("「" in t or "『" in t):
-        return "dialogue", 0.60
+        rule_log.append({"rule": "dialogue_brackets_partial", "fired": True})
+        return "dialogue", 0.60, None, rule_log
+
+    # Narration clues
     clues = narr_re if narr_re is not None else _DEFAULT_NARR_CLUES
     if clues and clues.search(t):
-        return "narration", 0.70
-    return "narration", 0.50
+        rule_log.append({"rule": "narration_clues", "fired": True})
+        return "narration", 0.70, None, rule_log
+
+    rule_log.append({"rule": "default_narration", "fired": True})
+    return "narration", 0.50, None, rule_log
 
 
 def rule_based_pass(
@@ -160,11 +207,13 @@ def rule_based_pass(
 ) -> List[AnnotatedSegment]:
     use_dialogue = True
     use_thought = True
+    use_monologue = False
     narr_re: Optional[re.Pattern] = None
 
     if config is not None:
         use_dialogue = config.get_rule("dialogue_brackets") is not None
         use_thought = config.get_rule("thought_brackets") is not None
+        use_monologue = config.get_rule("monologue_detection") is not None
         narr_spec = config.get_rule("narration_clues")
         if narr_spec is not None:
             kws = narr_spec.params.get("keywords", AVAILABLE_RULES["narration_clues"]["params"]["keywords"]["default"])
@@ -186,15 +235,20 @@ def rule_based_pass(
                 confidence=0.95,
                 reason="chapter header",
                 is_chapter_header=True,
+                rule_log=[{"rule": "chapter_header", "fired": True}],
             ))
             continue
-        stype, conf = _rule_based_classify(
+        stype, conf, monologue_subtype, rule_log = _rule_based_classify(
             text,
             use_dialogue=use_dialogue,
             use_thought=use_thought,
+            use_monologue=use_monologue,
             narr_re=narr_re,
         )
         speaker = "narrator" if stype == "narration" else "unknown"
+        # Monologue is typically the viewpoint character
+        if stype == "monologue":
+            speaker = "protagonist"
         annotated.append(AnnotatedSegment(
             chapter_index=seg.chapter_index,
             order_index=seg.order_index,
@@ -204,6 +258,8 @@ def rule_based_pass(
             predicted_speaker=speaker,
             confidence=conf,
             reason="rule-based",
+            monologue_subtype=monologue_subtype,
+            rule_log=rule_log,
         ))
     return annotated
 
@@ -480,3 +536,338 @@ def build_speaker_list(segments: List[AnnotatedSegment]) -> List[dict]:
     for name, count in counts.most_common():
         speakers.append({"name": name, "segment_count": count, "aliases": []})
     return speakers
+
+
+# ── Enhanced pipeline (v2) ────────────────────────────────────────────────────
+
+_SYSTEM_PROMPT_V2 = """あなたは日本語ラノベの話者識別AIです。
+各セグメントについてJSON配列を返してください。
+
+出力形式（必ずこの形式のみ）:
+[
+  {
+    "order_index": <int>,
+    "speaker": "<candidatesのcharacter_idまたは'unknown'>",
+    "confidence": <float 0.0-1.0>,
+    "evidence_spans": ["<根拠テキスト30字以内>"],
+    "reason_short": "<30字以内の日本語>",
+    "needs_review": <true/false>
+  }
+]
+
+制約:
+- speaker は必ず渡された candidates リストの character_id か "unknown" のみ使用すること
+- needs_review=true にする条件: confidence < 0.55 または上位2候補のスコア差 < 0.1
+- evidence_spans は最大2件、各30字以内のテキスト抜粋
+- JSONのみ返すこと。説明文は一切不要。"""
+
+
+def _validate_llm_v2_item(item: dict, valid_ids: set) -> bool:
+    """Validate a single v2 LLM response item."""
+    required = {"order_index", "speaker", "confidence", "evidence_spans",
+                "reason_short", "needs_review"}
+    if not required.issubset(item.keys()):
+        return False
+    if item["speaker"] not in valid_ids and item["speaker"] != "unknown":
+        return False
+    if not (0.0 <= float(item.get("confidence", -1)) <= 1.0):
+        return False
+    return True
+
+
+def _format_candidates_for_prompt(candidate_dicts: List[dict]) -> str:
+    """Format candidate list as a compact string for the LLM prompt."""
+    parts = []
+    for c in candidate_dicts:
+        ev = "; ".join(c.get("evidence", [])[:2])
+        parts.append(f"  - id={c['character_id']} name={c['name']} "
+                     f"prior={c['confidence']:.2f} ev=[{ev}]")
+    return "\n".join(parts) if parts else "  (候補なし)"
+
+
+def _llm_annotate_batch_v2(
+    segments: List[AnnotatedSegment],
+    batch: List[AnnotatedSegment],
+    candidate_map: Dict[int, List[dict]],  # order_index → candidate dicts
+) -> tuple[List[dict], Optional[LlmBatchError]]:
+    """Call LLM with candidate-constrained prompt (v2).
+
+    Retries up to 2 extra times on JSON parse or validation failure.
+    Returns (results, error_info).
+    """
+    llm_url = _get_llm_api_url()
+    if not llm_url:
+        return [], None
+
+    target_idx = [s.order_index for s in batch]
+
+    context_set = set(target_idx)
+    for idx in target_idx:
+        for d in range(-LLM_CONTEXT_WINDOW, LLM_CONTEXT_WINDOW + 1):
+            context_set.add(idx + d)
+
+    context_segs = sorted(
+        [s for s in segments if s.order_index in context_set],
+        key=lambda s: s.order_index,
+    )
+
+    user_msg_parts = []
+    for s in context_segs:
+        if s.order_index in target_idx:
+            cands = candidate_map.get(s.order_index, [])
+            cand_str = _format_candidates_for_prompt(cands)
+            valid_ids = {c["character_id"] for c in cands} | {"unknown"}
+            user_msg_parts.append(
+                f"[{s.order_index}][TARGET] type={s.segment_type}: "
+                f"{s.normalized_text[:150]}\n"
+                f"candidates:\n{cand_str}"
+            )
+        else:
+            user_msg_parts.append(
+                f"[{s.order_index}] type={s.segment_type} "
+                f"speaker={s.predicted_speaker}: {s.normalized_text[:80]}"
+            )
+
+    # Collect valid IDs for validation
+    all_valid_ids: set = set()
+    for idx in target_idx:
+        cands = candidate_map.get(idx, [])
+        all_valid_ids.update(c["character_id"] for c in cands)
+    all_valid_ids.add("unknown")
+
+    user_content = "\n---\n".join(user_msg_parts)
+    user_content += f"\n\nTARGETのorder_indexは {target_idx} です。これらのみ出力してください。"
+
+    headers = {"Content-Type": "application/json"}
+    api_key = _get_llm_api_key()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    payload = {
+        "model": _get_llm_model(),
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT_V2},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": 0.1,
+        "max_tokens": 2000,
+    }
+
+    last_err: Optional[LlmBatchError] = None
+    raw_content = ""
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                f"{llm_url.rstrip('/')}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=90,
+            )
+            resp.raise_for_status()
+            try:
+                from app.orchestrator.services.llm_manager import touch_last_used
+                touch_last_used()
+            except Exception:
+                pass
+            raw_content = resp.json()["choices"][0]["message"]["content"].strip()
+            cleaned = re.sub(r"```json\s*", "", raw_content)
+            cleaned = re.sub(r"```\s*", "", cleaned)
+            parsed = json.loads(cleaned)
+            # Validate each item
+            valid = [item for item in parsed if _validate_llm_v2_item(item, all_valid_ids)]
+            if valid:
+                return valid, None
+            # All items failed validation – retry
+            logger.warning(
+                f"LLM v2 attempt {attempt+1}: all items failed validation, "
+                f"retrying... (response excerpt: {raw_content[:200]!r})"
+            )
+        except json.JSONDecodeError as e:
+            logger.warning(f"LLM v2 attempt {attempt+1} JSON error: {e}")
+            last_err = LlmBatchError(
+                batch_order_indices=target_idx,
+                exception_type="JSONDecodeError",
+                message=str(e),
+                raw_response_excerpt=raw_content[:300],
+            )
+        except Exception as e:
+            logger.warning(f"LLM v2 attempt {attempt+1} error: {e}")
+            last_err = LlmBatchError(
+                batch_order_indices=target_idx,
+                exception_type=type(e).__name__,
+                message=str(e),
+                raw_response_excerpt=raw_content[:300] if raw_content else "",
+            )
+
+    if last_err is None:
+        last_err = LlmBatchError(
+            batch_order_indices=target_idx,
+            exception_type="ValidationError",
+            message="All attempts produced invalid response",
+            raw_response_excerpt=raw_content[:300],
+        )
+    return [], last_err
+
+
+def segment_speakers_enhanced(
+    raw_segments: List[RawSegment],
+    config: Optional[DiarizationConfig] = None,
+    char_dict=None,           # Optional[CharacterDict]
+    project_id: Optional[str] = None,
+    db=None,                  # Optional SQLAlchemy Session
+    progress_cb=None,
+) -> tuple[List[AnnotatedSegment], List[dict]]:
+    """Enhanced v2 pipeline.
+
+    Stages:
+      1. rule_based_pass  (with monologue_detection enabled)
+      2. build_character_dict  →  persist to DB
+      3. generate_candidates  per dialogue/thought/unknown/monologue segment
+      4. _llm_annotate_batch_v2  with candidate maps
+      5. apply_global_consistency
+      6. _apply_speaker_propagation
+
+    The original segment_speakers() is NOT modified – callers opt in via
+    use_enhanced_pipeline=True in the request body.
+    """
+    import time as _time
+    from app.orchestrator.services.character_builder import (
+        build_character_dict, persist_character_dict,
+    )
+    from app.orchestrator.services.candidate_generator import (
+        generate_candidates, candidate_set_to_dicts,
+    )
+    from app.orchestrator.services.global_consistency import apply_global_consistency
+
+    def _cb(stage: str, pct: int, cur: int = 0, total: int = 0) -> None:
+        if progress_cb is not None:
+            try:
+                progress_cb(stage, pct, cur, total)
+            except Exception:
+                pass
+
+    total_segs = len(raw_segments)
+    llm_errors: List[dict] = []
+
+    # ── Stage 1: rule-based pass with monologue detection ─────────────────────
+    _cb("rule_based", 5, 0, total_segs)
+    # Enable monologue detection in the config
+    enhanced_config = _make_enhanced_config(config)
+    annotated = rule_based_pass(raw_segments, config=enhanced_config)
+
+    # ── Stage 2: build character dictionary ──────────────────────────────────
+    _cb("char_dict_build", 15, 0, total_segs)
+    if char_dict is None:
+        existing_names = [s.predicted_speaker for s in annotated
+                          if s.predicted_speaker not in ("unknown", "narrator", "protagonist", "")]
+        char_dict = build_character_dict(annotated, existing_names)
+
+    if db is not None and project_id is not None:
+        try:
+            persist_character_dict(char_dict, project_id, db)
+        except Exception as e:
+            logger.warning(f"persist_character_dict failed: {e}")
+
+    # ── Stage 3: candidate generation ────────────────────────────────────────
+    _cb("candidate_gen", 25, 0, total_segs)
+    target_types = {"dialogue", "thought", "monologue", "unknown"}
+    candidate_map: Dict[int, List[dict]] = {}
+
+    for seg in annotated:
+        if seg.is_chapter_header or seg.segment_type not in target_types:
+            continue
+        cs = generate_candidates(seg, annotated, char_dict)
+        cand_dicts = candidate_set_to_dicts(cs)
+        candidate_map[seg.order_index] = cand_dicts
+        seg.candidates = cand_dicts
+
+    # ── Stage 4: LLM re-ranking ───────────────────────────────────────────────
+    llm_url = _get_llm_api_url()
+    run_llm = bool(llm_url)
+    if config is not None:
+        run_llm = run_llm and (config.get_rule("llm_refinement") is not None)
+
+    if run_llm:
+        llm_spec = config.get_rule("llm_refinement") if config else None
+        conf_threshold = float(
+            (llm_spec.params.get("confidence_threshold") if llm_spec else None) or 0.8
+        )
+        targets = [
+            s for s in annotated
+            if not s.is_chapter_header
+            and s.segment_type in target_types
+            and (s.confidence < conf_threshold or s.predicted_speaker == "unknown")
+        ]
+        total_batches = max(1, (len(targets) + BATCH_SIZE - 1) // BATCH_SIZE)
+        logger.info(
+            f"LLM v2 refinement: {len(targets)} segments in {total_batches} batches"
+        )
+
+        for i in range(0, len(targets), BATCH_SIZE):
+            batch_num = i // BATCH_SIZE + 1
+            batch = targets[i: i + BATCH_SIZE]
+            batch_pct = 30 + int((batch_num / total_batches) * 40)
+            _cb("llm_batch", batch_pct, batch_num, total_batches)
+
+            t0 = _time.time()
+            results, err = _llm_annotate_batch_v2(annotated, batch, candidate_map)
+            elapsed = round(_time.time() - t0, 1)
+            logger.info(
+                f"LLM v2 batch {batch_num}/{total_batches}: "
+                f"{len(batch)} segs, {elapsed}s, {'OK' if err is None else 'FAIL'}"
+            )
+
+            if err is not None:
+                llm_errors.append({
+                    "batch_order_indices": err.batch_order_indices,
+                    "exception_type": err.exception_type,
+                    "message": err.message,
+                    "raw_response_excerpt": err.raw_response_excerpt,
+                })
+                continue
+
+            result_map = {r["order_index"]: r for r in results}
+            for seg in batch:
+                if seg.order_index in result_map:
+                    r = result_map[seg.order_index]
+                    # Resolve speaker from character_id → canonical name
+                    speaker_id = r.get("speaker", "unknown")
+                    entry = char_dict.find_by_id(speaker_id) if speaker_id != "unknown" else None
+                    seg.predicted_speaker = entry.canonical_name if entry else speaker_id
+                    seg.character_id = speaker_id if speaker_id != "unknown" else None
+                    seg.confidence = float(r.get("confidence", seg.confidence))
+                    seg.evidence_spans = r.get("evidence_spans", [])
+                    seg.needs_review = bool(r.get("needs_review", False))
+                    seg.reason = r.get("reason_short", seg.reason) + " (llm_v2)"
+    else:
+        logger.info("LLM disabled – skipping LLM v2 refinement")
+
+    # ── Stage 5: global consistency ───────────────────────────────────────────
+    _cb("consistency_pass", 75, 0, total_segs)
+    try:
+        apply_global_consistency(annotated, char_dict)
+    except Exception as e:
+        logger.warning(f"global_consistency failed (non-fatal): {e}")
+
+    # ── Stage 6: speaker propagation ─────────────────────────────────────────
+    _cb("speaker_propagation", 90, 0, total_segs)
+    _maybe_apply_propagation(annotated, config)
+
+    _cb("complete", 100, total_segs, total_segs)
+    return annotated, llm_errors
+
+
+def _make_enhanced_config(config: Optional[DiarizationConfig]) -> DiarizationConfig:
+    """Return a config that has monologue_detection enabled (adds it if absent)."""
+    if config is None:
+        # Default config + monologue_detection
+        rules = [RuleSpec(r) for r in DEFAULT_RULE_ORDER]
+        rules.append(RuleSpec("monologue_detection", enabled=True))
+        return DiarizationConfig(rules=rules)
+
+    # Check if monologue_detection is already in the config
+    ids = [r.rule_id for r in config.rules]
+    if "monologue_detection" not in ids:
+        new_rules = list(config.rules) + [RuleSpec("monologue_detection", enabled=True)]
+        return DiarizationConfig(rules=new_rules, llm_fallback_mode=config.llm_fallback_mode)
+    return config
