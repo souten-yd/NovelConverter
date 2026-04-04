@@ -5,42 +5,40 @@
 
 <div class="page-header">
   <h1>LLM管理</h1>
-  <p class="text-muted">llama.cpp-cuda サーバーの管理・GGUFモデルのダウンロード</p>
+  <p class="text-muted">llama.cpp サーバーの管理・モデル設定・自動アンロード</p>
 </div>
 
 <!-- ── Server status ───────────────────────────────────── -->
-<div class="card" id="serverCard">
-  <h2>サーバー状態</h2>
-  <div id="statusBadge" class="status-badge stopped">停止中</div>
-  <div id="statusDetail" class="text-muted" style="margin-top:4px;font-size:0.85em"></div>
-  <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+<div class="card" id="serverCard" style="padding:16px">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+    <h2 style="margin:0">サーバー状態</h2>
+    <div id="statusBadge" class="status-badge stopped">停止中</div>
+    <span id="statusModelName" style="font-size:0.85em;color:#64748b"></span>
+  </div>
+  <div id="statusDetail" class="text-muted" style="font-size:0.85em;margin-bottom:6px"></div>
+  <div id="statusIdleInfo" style="font-size:0.82em;color:#64748b;margin-bottom:8px"></div>
+  <!-- stderr display (collapsed) -->
+  <div id="stderrBlock" style="display:none;margin-bottom:8px">
+    <details>
+      <summary style="cursor:pointer;font-size:0.83em;color:#c53030;font-weight:600">サーバーログ (stderr)</summary>
+      <pre id="stderrContent" style="font-size:0.75em;white-space:pre-wrap;word-break:break-all;background:#1a1a2e;color:#e2e8f0;padding:10px;border-radius:6px;max-height:200px;overflow-y:auto;margin-top:6px"></pre>
+    </details>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
     <button id="btnUnload" class="btn btn-danger" onclick="unloadModel()" disabled>アンロード</button>
   </div>
 </div>
 
 <!-- ── Local models ───────────────────────────────────── -->
-<div class="card" style="margin-top:20px">
+<div class="card" style="margin-top:16px;padding:16px">
   <h2>ローカルモデル一覧</h2>
   <div id="localModelsList">
     <p class="text-muted">読み込み中...</p>
   </div>
 </div>
 
-<!-- ── Load config ────────────────────────────────────── -->
-<div class="card" style="margin-top:20px" id="loadConfigCard">
-  <h2>ロード設定</h2>
-  <div class="form-row">
-    <label>GPUレイヤー数 <span class="text-muted">(-1=全て)</span></label>
-    <input type="number" id="nGpuLayers" value="-1" min="-1" max="1000" class="input" style="width:100px">
-  </div>
-  <div class="form-row" style="margin-top:8px">
-    <label>コンテキストサイズ</label>
-    <input type="number" id="ctxSize" value="4096" min="512" max="131072" step="512" class="input" style="width:120px">
-  </div>
-</div>
-
 <!-- ── HuggingFace search ─────────────────────────────── -->
-<div class="card" style="margin-top:20px">
+<div class="card" style="margin-top:16px;padding:16px">
   <h2>HuggingFace 検索</h2>
   <div style="display:flex;gap:8px;flex-wrap:wrap">
     <input type="text" id="searchQuery" class="input" placeholder="例: llama gguf q4" style="flex:1;min-width:200px" onkeydown="if(event.key==='Enter')searchModels()">
@@ -50,7 +48,7 @@
 </div>
 
 <!-- ── Download queue ─────────────────────────────────── -->
-<div class="card" style="margin-top:20px" id="downloadQueueCard" style="display:none">
+<div class="card" style="margin-top:16px;padding:16px;display:none" id="downloadQueueCard">
   <h2>ダウンロードキュー</h2>
   <div id="downloadQueue"></div>
 </div>
@@ -64,9 +62,36 @@
 .status-badge.loading  { background:#fefcbf; color:#744210; }
 .status-badge.running  { background:#c6f6d5; color:#276749; }
 .status-badge.error    { background:#fed7d7; color:#c53030; }
-.model-row { display:flex; align-items:center; gap:10px; padding:10px; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:8px; flex-wrap:wrap; }
-.model-row .model-name { flex:1; font-weight:500; word-break:break-all; }
-.model-row .model-size { color:#718096; font-size:0.85em; white-space:nowrap; }
+
+.model-card {
+  border:1px solid #e2e8f0; border-radius:10px; margin-bottom:12px; overflow:hidden;
+}
+.model-card-header {
+  display:flex; align-items:center; gap:10px; padding:12px 14px;
+  background:#f8fafc; flex-wrap:wrap;
+}
+.model-card-header .model-name { flex:1; font-weight:600; font-size:0.9em; word-break:break-all; }
+.model-card-header .model-size { color:#64748b; font-size:0.82em; white-space:nowrap; }
+.model-card-settings {
+  padding:12px 14px; border-top:1px solid #e2e8f0; background:#fff;
+  display:none; /* toggled by expandSettings() */
+}
+.model-card-settings.open { display:block; }
+.settings-grid {
+  display:grid; grid-template-columns:1fr 1fr; gap:8px 16px;
+}
+@media (max-width:600px) { .settings-grid { grid-template-columns:1fr; } }
+.settings-row { display:flex; flex-direction:column; gap:3px; }
+.settings-row label { font-size:0.78em; color:#64748b; font-weight:600; }
+.settings-row input, .settings-row select {
+  padding:5px 8px; border:1px solid #e2e8f0; border-radius:6px; font-size:0.85em;
+}
+.settings-row .hint { font-size:0.72em; color:#94a3b8; }
+.settings-checkbox-row { display:flex; align-items:center; gap:8px; font-size:0.85em; }
+.settings-checkbox-row input[type=checkbox] { width:16px; height:16px; }
+.main-badge { background:#dbeafe; color:#1d4ed8; padding:2px 8px; border-radius:8px; font-size:0.75em; font-weight:700; }
+.loaded-badge { background:#d1fae5; color:#065f46; padding:2px 8px; border-radius:8px; font-size:0.75em; font-weight:700; }
+
 .search-result-card { border:1px solid #e2e8f0; border-radius:8px; padding:12px; margin-bottom:12px; }
 .search-result-card h4 { margin:0 0 4px; font-size:0.95em; color:#2d3748; word-break:break-all; }
 .search-result-card .meta { font-size:0.8em; color:#718096; margin-bottom:8px; }
@@ -77,35 +102,80 @@
 .dl-badge.downloading { background:#bee3f8; color:#2a69ac; }
 .dl-badge.done { background:#c6f6d5; color:#276749; }
 .dl-badge.error { background:#fed7d7; color:#c53030; }
-.form-row { display:flex; align-items:center; gap:10px; }
-.form-row label { min-width:160px; font-size:0.9em; }
 </style>
 <script>
 const downloadTasks = {};  // taskKey → { status, name }
+
+// Safe DOM ID from arbitrary string (avoids btoa() DOMException with non-Latin-1 chars on Safari)
+function safeId(s) {
+  return s.replace(/[^a-zA-Z0-9_-]/g, c => '_' + c.codePointAt(0).toString(16));
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Status ──────────────────────────────────────────────────────────────────
 
 async function refreshStatus() {
   const r = await fetch('/api/llm/status');
   if (!r.ok) return;
   const s = await r.json();
+
   const badge = document.getElementById('statusBadge');
   badge.className = 'status-badge ' + s.status;
   const labels = { stopped:'停止中', loading:'読み込み中...', running:'稼働中', error:'エラー' };
   badge.textContent = labels[s.status] || s.status;
 
+  const nameEl = document.getElementById('statusModelName');
+  nameEl.textContent = s.status === 'running' ? s.model_filename : '';
+
   const detail = document.getElementById('statusDetail');
+  const idleEl = document.getElementById('statusIdleInfo');
   if (s.status === 'running') {
-    detail.textContent = `モデル: ${s.model_filename}  ポート: ${s.port}  PID: ${s.pid}`;
+    const params = s.load_params || {};
+    detail.textContent = `ポート: ${s.port}  PID: ${s.pid}  GPU層: ${params.n_gpu_layers ?? '?'}  CTX: ${params.ctx_size ?? '?'}`;
+    detail.style.color = '';
+    if (s.idle_seconds !== null && s.idle_seconds !== undefined) {
+      const mins = Math.floor(s.idle_seconds / 60);
+      const secs = Math.floor(s.idle_seconds % 60);
+      const idleStr = mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`;
+      let autoInfo = '';
+      if (s.auto_unload_seconds > 0) {
+        const remaining = Math.max(0, s.auto_unload_seconds - s.idle_seconds);
+        const remMins = Math.floor(remaining / 60);
+        const remSecs = Math.floor(remaining % 60);
+        autoInfo = `  /  自動アンロードまで: ${remMins > 0 ? remMins + '分' : ''}${remSecs}秒`;
+      }
+      idleEl.textContent = `最終使用: ${idleStr}前${autoInfo}`;
+    } else {
+      idleEl.textContent = '';
+    }
   } else if (s.status === 'error') {
     detail.textContent = s.error;
     detail.style.color = '#c53030';
+    idleEl.textContent = '';
   } else {
     detail.textContent = '';
     detail.style.color = '';
+    idleEl.textContent = '';
+  }
+
+  // stderr block
+  const stderrBlock = document.getElementById('stderrBlock');
+  const stderrContent = document.getElementById('stderrContent');
+  if (s.stderr) {
+    stderrBlock.style.display = '';
+    stderrContent.textContent = s.stderr;
+  } else {
+    stderrBlock.style.display = 'none';
   }
 
   const btnUnload = document.getElementById('btnUnload');
   btnUnload.disabled = s.status !== 'running';
 }
+
+// ── Local models ─────────────────────────────────────────────────────────────
 
 async function refreshLocalModels() {
   const r = await fetch('/api/llm/models');
@@ -120,34 +190,126 @@ async function refreshLocalModels() {
 
   const statusR = await fetch('/api/llm/status');
   const statusData = statusR.ok ? await statusR.json() : {};
+  const isRunning = statusData.status === 'running';
 
-  el.innerHTML = models.map(m => `
-    <div class="model-row">
-      <span class="model-name">${m.filename} ${m.loaded ? '<span class="dl-badge done">ロード済み</span>' : ''}</span>
-      <span class="model-size">${m.size_mb} MB</span>
-      <button class="btn btn-primary btn-sm" onclick="loadModel('${m.filename}')"
-        ${statusData.status === 'running' ? 'disabled' : ''}>ロード</button>
-      <button class="btn btn-danger btn-sm" onclick="deleteModel('${m.filename}')"
-        ${m.loaded ? 'disabled' : ''}>削除</button>
-    </div>
-  `).join('');
+  el.innerHTML = models.map(m => {
+    const sid = safeId(m.filename);
+    const s = m.settings || {};
+    return `
+    <div class="model-card" id="mcard-${sid}">
+      <div class="model-card-header">
+        <span class="model-name">
+          ${escHtml(m.filename)}
+          ${m.loaded ? '<span class="loaded-badge">ロード中</span>' : ''}
+          ${s.is_main_model ? '<span class="main-badge">メイン</span>' : ''}
+        </span>
+        <span class="model-size">${m.size_mb} MB</span>
+        <button class="btn btn-outline btn-sm" onclick="expandSettings('${sid}')">⚙ 設定</button>
+        <button class="btn btn-primary btn-sm" onclick="loadModel('${escHtml(m.filename)}', '${sid}')"
+          ${isRunning ? 'disabled' : ''}>ロード</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteModel('${escHtml(m.filename)}')"
+          ${m.loaded ? 'disabled' : ''}>削除</button>
+      </div>
+      <div class="model-card-settings" id="msettings-${sid}">
+        <div class="settings-grid">
+          <div class="settings-row">
+            <label>GPU レイヤー数 <span class="hint">(-1=全て)</span></label>
+            <input type="number" id="s_gpu_${sid}" value="${s.n_gpu_layers ?? -1}" min="-1" max="1000">
+          </div>
+          <div class="settings-row">
+            <label>コンテキストサイズ</label>
+            <input type="number" id="s_ctx_${sid}" value="${s.ctx_size ?? 4096}" min="512" max="131072" step="512">
+          </div>
+          <div class="settings-row">
+            <label>バッチサイズ</label>
+            <input type="number" id="s_batch_${sid}" value="${s.batch_size ?? 512}" min="64" max="4096" step="64">
+          </div>
+          <div class="settings-row">
+            <label>スレッド数 <span class="hint">(-1=自動)</span></label>
+            <input type="number" id="s_threads_${sid}" value="${s.threads ?? -1}" min="-1" max="64">
+          </div>
+          <div class="settings-row">
+            <label>自動アンロード (秒) <span class="hint">(0=無効)</span></label>
+            <input type="number" id="s_autounload_${sid}" value="${s.auto_unload_seconds ?? 0}" min="0" step="60">
+          </div>
+          <div class="settings-row" style="justify-content:flex-end;align-items:flex-end;gap:8px;flex-direction:row">
+            <label class="settings-checkbox-row">
+              <input type="checkbox" id="s_flash_${sid}" ${s.flash_attn ? 'checked' : ''}>
+              Flash Attention
+            </label>
+            <label class="settings-checkbox-row">
+              <input type="checkbox" id="s_main_${sid}" ${s.is_main_model ? 'checked' : ''}>
+              メインモデル
+            </label>
+          </div>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px">
+          <button class="btn btn-primary btn-sm" onclick="saveModelSettings('${escHtml(m.filename)}','${sid}')">設定を保存</button>
+          <span id="settingsSaved-${sid}" style="font-size:0.82em;color:#276749;display:none">✓ 保存完了</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
-async function loadModel(filename) {
-  const nGpu = parseInt(document.getElementById('nGpuLayers').value) || -1;
-  const ctx = parseInt(document.getElementById('ctxSize').value) || 4096;
+function expandSettings(sid) {
+  const el = document.getElementById('msettings-' + sid);
+  if (el) el.classList.toggle('open');
+}
+
+async function saveModelSettings(filename, sid) {
+  const body = {
+    model_filename: filename,
+    n_gpu_layers: parseInt(document.getElementById('s_gpu_' + sid)?.value) || -1,
+    ctx_size: parseInt(document.getElementById('s_ctx_' + sid)?.value) || 4096,
+    batch_size: parseInt(document.getElementById('s_batch_' + sid)?.value) || 512,
+    threads: parseInt(document.getElementById('s_threads_' + sid)?.value) || -1,
+    flash_attn: document.getElementById('s_flash_' + sid)?.checked || false,
+    auto_unload_seconds: parseInt(document.getElementById('s_autounload_' + sid)?.value) || 0,
+    is_main_model: document.getElementById('s_main_' + sid)?.checked || false,
+  };
+  const r = await fetch('/api/llm/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  if (r.ok) {
+    const saved = document.getElementById('settingsSaved-' + sid);
+    if (saved) { saved.style.display = ''; setTimeout(() => saved.style.display = 'none', 2000); }
+    await refreshLocalModels(); // refresh to show main badge etc.
+  } else {
+    const e = await r.json().catch(() => ({}));
+    alert('設定保存失敗: ' + (e.detail || JSON.stringify(e)));
+  }
+}
+
+async function loadModel(filename, sid) {
+  // Read settings from expanded panel (or use defaults from model card)
+  const nGpu = parseInt(document.getElementById('s_gpu_' + sid)?.value ?? '-1') || -1;
+  const ctx = parseInt(document.getElementById('s_ctx_' + sid)?.value ?? '4096') || 4096;
+  const batch = parseInt(document.getElementById('s_batch_' + sid)?.value ?? '512') || 512;
+  const threads = parseInt(document.getElementById('s_threads_' + sid)?.value ?? '-1') || -1;
+  const flash = document.getElementById('s_flash_' + sid)?.checked || false;
 
   const badge = document.getElementById('statusBadge');
   badge.className = 'status-badge loading';
   badge.textContent = '読み込み中...';
   document.getElementById('statusDetail').textContent = `${filename} を起動中...`;
+  document.getElementById('statusModelName').textContent = '';
 
   const r = await fetch('/api/llm/load', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ model_filename: filename, n_gpu_layers: nGpu, ctx_size: ctx }),
+    body: JSON.stringify({
+      model_filename: filename,
+      n_gpu_layers: nGpu,
+      ctx_size: ctx,
+      batch_size: batch,
+      threads: threads,
+      flash_attn: flash,
+    }),
   });
-  const data = await r.json();
+  const data = await r.json().catch(() => ({}));
   if (!r.ok) {
     alert('ロード失敗: ' + (data.detail || JSON.stringify(data)));
   }
@@ -166,12 +328,14 @@ async function deleteModel(filename) {
   if (!confirm(`${filename} を削除しますか？`)) return;
   const r = await fetch(`/api/llm/models/${encodeURIComponent(filename)}`, { method: 'DELETE' });
   if (!r.ok) {
-    const e = await r.json();
+    const e = await r.json().catch(() => ({}));
     alert('削除失敗: ' + (e.detail || JSON.stringify(e)));
   } else {
     await refreshLocalModels();
   }
 }
+
+// ── HuggingFace search ────────────────────────────────────────────────────────
 
 async function searchModels() {
   const q = document.getElementById('searchQuery').value.trim();
@@ -194,26 +358,27 @@ async function searchModels() {
   }
 
   el.innerHTML = results.map(m => `
-    <div class="search-result-card" id="card-${btoa(m.repo_id).replace(/[^a-zA-Z0-9]/g,'')}">
-      <h4>${m.repo_id}</h4>
+    <div class="search-result-card" id="card-${safeId(m.repo_id)}">
+      <h4>${escHtml(m.repo_id)}</h4>
       <div class="meta">
         ダウンロード: ${m.downloads.toLocaleString()}  ❤️ ${m.likes}
-        ${m.pipeline_tag ? ` &nbsp;|&nbsp; ${m.pipeline_tag}` : ''}
+        ${m.pipeline_tag ? ` &nbsp;|&nbsp; ${escHtml(m.pipeline_tag)}` : ''}
       </div>
       <div class="file-select-row">
-        <select id="filesel-${btoa(m.repo_id).replace(/[^a-zA-Z0-9]/g,'')}" class="input" style="flex:1" onchange="" disabled>
+        <select id="filesel-${safeId(m.repo_id)}" class="input" style="flex:1" disabled>
           <option>ファイル一覧を取得中...</option>
         </select>
-        <button class="btn btn-outline btn-sm" onclick="fetchFiles('${m.repo_id}')">ファイル一覧</button>
-        <button class="btn btn-primary btn-sm" onclick="startDownload('${m.repo_id}')">ダウンロード</button>
+        <button class="btn btn-outline btn-sm" onclick="fetchFiles('${escHtml(m.repo_id)}')">ファイル一覧</button>
+        <button class="btn btn-primary btn-sm" onclick="startDownload('${escHtml(m.repo_id)}')">ダウンロード</button>
       </div>
     </div>
   `).join('');
 }
 
 async function fetchFiles(repoId) {
-  const safeId = btoa(repoId).replace(/[^a-zA-Z0-9]/g,'');
-  const sel = document.getElementById('filesel-' + safeId);
+  const sid = safeId(repoId);
+  const sel = document.getElementById('filesel-' + sid);
+  if (!sel) return;
   sel.disabled = true;
   sel.innerHTML = '<option>取得中...</option>';
 
@@ -231,14 +396,15 @@ async function fetchFiles(repoId) {
   }
   sel.innerHTML = files.map(f => {
     const sizeStr = f.size ? ` (${(f.size/(1024*1024)).toFixed(0)} MB)` : '';
-    return `<option value="${f.filename}">${f.filename}${sizeStr}</option>`;
+    return `<option value="${escHtml(f.filename)}">${escHtml(f.filename)}${sizeStr}</option>`;
   }).join('');
   sel.disabled = false;
 }
 
 async function startDownload(repoId) {
-  const safeId = btoa(repoId).replace(/[^a-zA-Z0-9]/g,'');
-  const sel = document.getElementById('filesel-' + safeId);
+  const sid = safeId(repoId);
+  const sel = document.getElementById('filesel-' + sid);
+  if (!sel) return;
   const filename = sel.value;
   if (!filename || sel.disabled) {
     alert('先にファイル一覧を取得し、ファイルを選択してください');
@@ -248,16 +414,15 @@ async function startDownload(repoId) {
   const r = await fetch('/api/llm/download', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ repo_id: repoId, filename: filename }),
+    body: JSON.stringify({ repo_id: repoId, filename }),
   });
-  const data = await r.json();
+  const data = await r.json().catch(() => ({}));
   if (!r.ok) { alert('ダウンロード開始失敗: ' + (data.detail || JSON.stringify(data))); return; }
 
   const taskKey = data.task_key;
   downloadTasks[taskKey] = { status: 'downloading', name: filename };
   renderDownloadQueue();
 
-  // poll status
   const interval = setInterval(async () => {
     const sr = await fetch(`/api/llm/download/status?task_key=${encodeURIComponent(taskKey)}`);
     if (!sr.ok) return;
@@ -284,19 +449,18 @@ function renderDownloadQueue() {
     const t = downloadTasks[k];
     const badgeClass = t.status === 'done' ? 'done' : t.status === 'error' ? 'error' : 'downloading';
     const badgeLabel = t.status === 'done' ? '完了' : t.status === 'error' ? 'エラー' : 'ダウンロード中...';
-    const extra = t.status === 'error' ? `<span style="color:red;font-size:0.8em">${t.error || ''}</span>` : '';
+    const extra = t.status === 'error' ? `<span style="color:red;font-size:0.8em">${escHtml(t.error || '')}</span>` : '';
     return `<div class="dl-item">
-      <span class="dl-name">${t.name || k}</span>
+      <span class="dl-name">${escHtml(t.name || k)}</span>
       <span class="dl-badge ${badgeClass}">${badgeLabel}</span>
       ${extra}
     </div>`;
   }).join('');
 }
 
-// Initial load
+// ── Init ──────────────────────────────────────────────────────────────────────
 refreshStatus();
 refreshLocalModels();
-// Poll server status every 5 seconds
 setInterval(refreshStatus, 5000);
 </script>
 {% endblock %}

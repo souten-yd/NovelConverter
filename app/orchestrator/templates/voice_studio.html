@@ -1,0 +1,693 @@
+{% extends "base.html" %}
+{% block title %}Voice Design Studio – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="breadcrumb">
+  <a href="/">ホーム</a> / <a href="/projects/{{ project.id }}">{{ project.name }}</a> / Voice Design Studio
+</div>
+
+<div class="page-header">
+  <h1>🎨 Voice Design Studio</h1>
+  <span class="badge badge-{{ project.status }}">{{ project.status }}</span>
+  <a href="/projects/{{ project.id }}" class="btn btn-outline btn-sm" style="margin-left:auto">← プロジェクトに戻る</a>
+</div>
+
+{% if not speaker_profiles %}
+<div class="card" style="padding:20px;text-align:center">
+  <p class="text-muted">話者が設定されていません。先に話者分割を実行してください。</p>
+  <a href="/projects/{{ project.id }}/diarization_studio" class="btn btn-primary" style="margin-top:12px">話者分割スタジオへ</a>
+</div>
+{% else %}
+
+<div class="vds-layout">
+  <!-- ══════════ LEFT: Speaker list ══════════ -->
+  <div class="vds-sidebar" id="vdsSidebar">
+    <div class="card vds-sidebar-card">
+      <h2 style="margin:0 0 12px;font-size:16px">話者一覧</h2>
+      <div id="speakerList">
+        {% for item in speaker_profiles %}
+        <div class="speaker-chip {% if loop.first %}selected{% endif %}"
+             id="chip-{{ item.speaker.id }}"
+             onclick="selectSpeaker('{{ item.speaker.id }}', '{{ item.speaker.name | e }}')">
+          <div class="speaker-chip-inner">
+            <div class="speaker-avatar" id="avatar-{{ item.speaker.id }}"
+                 style="background:{{ ['#4299e1','#48bb78','#ed8936','#e53e3e','#9f7aea','#ed64a6'][loop.index0 % 6] }}">
+              {{ item.speaker.name[0] if item.speaker.name else '?' }}
+            </div>
+            <div style="flex:1;min-width:0">
+              <div class="speaker-chip-name">{{ item.speaker.name }}</div>
+              <div class="speaker-chip-meta">
+                {{ item.speaker.segment_count }}セグメント
+                {% if item.profile %}
+                  · <span class="worker-mini-badge wt-{{ item.profile.worker_type }}">{{ item.profile.worker_type }}</span>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          <!-- Assigned voice indicator -->
+          <div class="cassette-slot" id="cassette-{{ item.speaker.id }}">
+            {% if item.profile and item.profile.worker_type == 'custom' and item.profile.speaker_name %}
+              <span class="cassette-tag">🎤 {{ item.profile.speaker_name }}</span>
+            {% elif item.profile and item.profile.worker_type == 'design' and item.profile.voice_description %}
+              <span class="cassette-tag">✍ デザイン設定済み</span>
+            {% elif item.profile and item.profile.worker_type == 'base' and item.profile.reference_audio_path %}
+              <span class="cassette-tag">🎵 クローン設定済み</span>
+            {% else %}
+              <span class="cassette-tag unset">未設定</span>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ RIGHT: Design panel ══════════ -->
+  <div class="vds-panel" id="vdsPanel">
+
+    <!-- Speaker header -->
+    <div class="card vds-speaker-header">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="speaker-avatar-lg" id="panelAvatar">?</div>
+        <div>
+          <h2 style="margin:0" id="panelSpeakerName">話者を選択してください</h2>
+          <div id="panelSpeakerMeta" class="text-muted" style="font-size:0.85em"></div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-outline btn-sm" onclick="suggestVoice()" id="btnSuggest" disabled>
+            ✨ AI音声提案
+          </button>
+        </div>
+      </div>
+      <!-- AI suggestions area -->
+      <div id="suggestArea" style="display:none;margin-top:12px"></div>
+    </div>
+
+    <!-- Worker type tabs -->
+    <div class="card" style="padding:0;margin-top:12px;overflow:hidden">
+      <div class="vds-tabs">
+        <button class="vds-tab active" id="tab-custom" onclick="switchWorkerTab('custom')">🎤 カスタム</button>
+        <button class="vds-tab" id="tab-design" onclick="switchWorkerTab('design')">✍ デザイン</button>
+        <button class="vds-tab" id="tab-base" onclick="switchWorkerTab('base')">🎵 クローン</button>
+      </div>
+
+      <!-- Custom tab -->
+      <div class="vds-tab-panel" id="panel-custom">
+        <div class="vds-form-section">
+          <div class="vds-field">
+            <label>話者名 <span class="text-muted" style="font-size:0.8em">(Qwen3-TTS組み込み話者)</span></label>
+            <select id="f_speaker_name" class="input" onchange="markDirty()">
+              <option value="">選択してください...</option>
+              <option>Aria</option><option>Roger</option><option>Sarah</option>
+              <option>Laura</option><option>Charlie</option><option>George</option>
+              <option>Callum</option><option>River</option><option>Liam</option>
+              <option>Charlotte</option><option>Alice</option><option>Matilda</option>
+              <option>Will</option><option>Jessica</option><option>Eric</option>
+              <option>Chris</option><option>Brian</option>
+            </select>
+          </div>
+          <div class="vds-field">
+            <label>音声スタイル指示 <span class="text-muted" style="font-size:0.8em">(任意)</span></label>
+            <textarea id="f_instruct" class="input" rows="3"
+              placeholder="例: 穏やかで優しい話し方で、少し遠慮がちに"
+              oninput="markDirty()"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- Design tab -->
+      <div class="vds-tab-panel" id="panel-design" style="display:none">
+        <div class="vds-form-section">
+          <div class="vds-field">
+            <label>声の説明文 <span class="text-muted" style="font-size:0.8em">(自然言語で声を描写)</span></label>
+            <textarea id="f_voice_description" class="input" rows="5"
+              placeholder="例: A warm, gentle female voice with a soft tone, speaking at a moderate pace with slight Japanese accent. The voice sounds young (early 20s) and kind."
+              oninput="markDirty(); updateCharCount()"></textarea>
+            <div id="descCharCount" style="font-size:0.78em;color:#94a3b8;text-align:right;margin-top:2px">0文字</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Base/clone tab -->
+      <div class="vds-tab-panel" id="panel-base" style="display:none">
+        <div class="vds-form-section">
+          <div class="vds-field">
+            <label>参照音声ファイル</label>
+            <div id="refAudioInfo" style="font-size:0.85em;color:#64748b;margin-bottom:8px">未設定</div>
+            <input type="file" id="f_ref_audio_file" accept=".wav,.mp3,.flac,.ogg,.m4a"
+                   style="display:none" onchange="uploadRefAudio()">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-outline btn-sm" onclick="document.getElementById('f_ref_audio_file').click()">
+                📂 音声ファイルを選択
+              </button>
+              <span id="refUploadStatus" style="font-size:0.82em;color:#64748b;align-self:center"></span>
+            </div>
+          </div>
+          <div class="vds-field">
+            <label>参照テキスト <span class="text-muted" style="font-size:0.8em">(参照音声の内容)</span></label>
+            <textarea id="f_reference_text" class="input" rows="2"
+              placeholder="参照音声のセリフを入力"
+              oninput="markDirty()"></textarea>
+          </div>
+          <input type="hidden" id="f_reference_audio_path">
+        </div>
+      </div>
+    </div>
+
+    <!-- Common audio params -->
+    <div class="card" style="margin-top:12px;padding:14px">
+      <h3 style="margin:0 0 10px;font-size:14px">共通パラメータ</h3>
+      <div class="vds-param-grid">
+        <div class="vds-param">
+          <label>話速 <span id="speedVal">1.0</span>x</label>
+          <input type="range" id="f_speed" min="0.5" max="2.0" step="0.05" value="1.0"
+                 oninput="document.getElementById('speedVal').textContent=parseFloat(this.value).toFixed(2);markDirty()">
+        </div>
+        <div class="vds-param">
+          <label>前ポーズ (ms)</label>
+          <input type="number" id="f_pause_before" class="input" value="0" min="0" max="5000" step="50" oninput="markDirty()">
+        </div>
+        <div class="vds-param">
+          <label>後ポーズ (ms)</label>
+          <input type="number" id="f_pause_after" class="input" value="300" min="0" max="5000" step="50" oninput="markDirty()">
+        </div>
+        <div class="vds-param">
+          <label>音量調整 (dB)</label>
+          <input type="number" id="f_volume_db" class="input" value="0" min="-20" max="20" step="0.5" oninput="markDirty()">
+        </div>
+      </div>
+    </div>
+
+    <!-- Preview + Save actions -->
+    <div class="card" style="margin-top:12px;padding:14px">
+      <h3 style="margin:0 0 10px;font-size:14px">プレビュー & 保存</h3>
+      <div class="vds-field">
+        <label>プレビューテキスト</label>
+        <input type="text" id="previewText" class="input"
+               value="こんにちは、よろしくお願いします。"
+               placeholder="試し読みするテキスト">
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+        <button class="btn btn-outline" onclick="generatePreview()" id="btnPreview" disabled>
+          ▶ 音声プレビュー生成
+        </button>
+        <button class="btn btn-primary" onclick="saveVoiceMapping()" id="btnSave" disabled>
+          💾 この話者に保存
+        </button>
+        <span id="saveStatus" style="font-size:0.85em"></span>
+      </div>
+      <!-- Audio player -->
+      <div id="previewAudioWrap" style="display:none;margin-top:10px">
+        <audio id="previewAudio" controls style="width:100%;border-radius:8px"></audio>
+        <div id="previewAudioMeta" style="font-size:0.78em;color:#64748b;margin-top:4px"></div>
+      </div>
+      <div id="previewError" style="display:none;color:#c53030;font-size:0.85em;margin-top:8px"></div>
+    </div>
+
+  </div><!-- /vds-panel -->
+</div><!-- /vds-layout -->
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<style>
+/* ── Layout ── */
+.vds-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 768px) {
+  .vds-layout { grid-template-columns: 1fr; }
+  .vds-sidebar { position: static !important; }
+}
+.vds-sidebar { position: sticky; top: 16px; }
+.vds-sidebar-card { padding: 14px; }
+
+/* ── Speaker chips ── */
+.speaker-chip {
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: .15s;
+  background: #fff;
+}
+.speaker-chip:hover { border-color: #4f6ef7; background: #f8faff; }
+.speaker-chip.selected { border-color: #4f6ef7; background: #eff2ff; }
+.speaker-chip-inner { display: flex; align-items: center; gap: 10px; }
+.speaker-avatar {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 16px; color: #fff; flex-shrink: 0;
+}
+.speaker-avatar-lg {
+  width: 48px; height: 48px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 22px; color: #fff;
+  background: #4299e1; flex-shrink: 0;
+}
+.speaker-chip-name { font-weight: 600; font-size: 0.9em; }
+.speaker-chip-meta { font-size: 0.75em; color: #64748b; margin-top: 2px; }
+
+/* Cassette slot */
+.cassette-slot { margin-top: 6px; }
+.cassette-tag {
+  display: inline-block; padding: 2px 8px; border-radius: 6px;
+  font-size: 0.72em; font-weight: 600;
+  background: #dbeafe; color: #1d4ed8;
+}
+.cassette-tag.unset { background: #e2e8f0; color: #64748b; }
+
+/* Worker badges */
+.worker-mini-badge { padding: 1px 5px; border-radius: 4px; font-size: 0.75em; font-weight: 700; }
+.wt-custom { background: #dbeafe; color: #1d4ed8; }
+.wt-design { background: #fef3c7; color: #92400e; }
+.wt-base   { background: #d1fae5; color: #065f46; }
+
+/* ── Panel ── */
+.vds-speaker-header { padding: 14px; }
+.vds-tabs { display: flex; border-bottom: 2px solid #e2e8f0; background: #f8fafc; }
+.vds-tab {
+  flex: 1; padding: 12px 8px; border: none; background: none;
+  font-size: 13px; font-weight: 600; color: #64748b;
+  cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px;
+  transition: .15s; -webkit-tap-highlight-color: transparent;
+}
+.vds-tab:hover { color: #4f6ef7; }
+.vds-tab.active { color: #4f6ef7; border-bottom-color: #4f6ef7; }
+.vds-tab-panel { padding: 16px; }
+.vds-form-section { display: flex; flex-direction: column; gap: 12px; }
+.vds-field { display: flex; flex-direction: column; gap: 4px; }
+.vds-field label { font-size: 0.85em; font-weight: 600; color: #374151; }
+
+/* ── Common params ── */
+.vds-param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+@media (max-width: 500px) { .vds-param-grid { grid-template-columns: 1fr; } }
+.vds-param { display: flex; flex-direction: column; gap: 4px; }
+.vds-param label { font-size: 0.8em; color: #64748b; font-weight: 600; }
+.vds-param input[type=range] { width: 100%; }
+.vds-param input[type=number] { width: 100%; }
+
+/* ── AI suggestion chips ── */
+.suggest-chip {
+  border: 1px solid #c7d2fe; border-radius: 8px; padding: 10px 12px;
+  cursor: pointer; background: #f5f3ff; transition: .15s; margin-bottom: 8px;
+}
+.suggest-chip:hover { background: #ede9fe; border-color: #7c3aed; }
+.suggest-chip-title { font-weight: 600; font-size: 0.85em; color: #5b21b6; }
+.suggest-chip-desc { font-size: 0.8em; color: #374151; margin-top: 3px; }
+.suggest-chip-reason { font-size: 0.75em; color: #64748b; margin-top: 2px; }
+</style>
+
+<script>
+const projectId = '{{ project.id }}';
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let currentSpeakerId = null;
+let currentSpeakerName = null;
+let isDirty = false;
+let currentWorkerType = 'custom';
+
+// Preloaded speaker profiles from server
+const speakerProfiles = {
+  {% for item in speaker_profiles %}
+  '{{ item.speaker.id }}': {
+    name: {{ item.speaker.name | tojson }},
+    segment_count: {{ item.speaker.segment_count }},
+    profile: {% if item.profile %}{
+      worker_type: {{ item.profile.worker_type | tojson }},
+      speaker_name: {{ (item.profile.speaker_name or '') | tojson }},
+      instruct: {{ (item.profile.instruct or '') | tojson }},
+      voice_description: {{ (item.profile.voice_description or '') | tojson }},
+      reference_audio_path: {{ (item.profile.reference_audio_path or '') | tojson }},
+      reference_text: {{ (item.profile.reference_text or '') | tojson }},
+      speed: {{ item.profile.speed }},
+      pause_ms_before: {{ item.profile.pause_ms_before }},
+      pause_ms_after: {{ item.profile.pause_ms_after }},
+      volume_gain_db: {{ item.profile.volume_gain_db }},
+    }{% else %}null{% endif %},
+  },
+  {% endfor %}
+};
+
+const AVATAR_COLORS = ['#4299e1','#48bb78','#ed8936','#e53e3e','#9f7aea','#ed64a6'];
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Speaker selection ─────────────────────────────────────────────────────────
+
+function selectSpeaker(speakerId, speakerName) {
+  if (isDirty && currentSpeakerId && !confirm('変更が保存されていません。別の話者に切り替えますか？')) return;
+
+  currentSpeakerId = speakerId;
+  currentSpeakerName = speakerName;
+  isDirty = false;
+
+  // Update sidebar selection
+  document.querySelectorAll('.speaker-chip').forEach(el => el.classList.remove('selected'));
+  const chip = document.getElementById('chip-' + speakerId);
+  if (chip) chip.classList.add('selected');
+
+  // Update header
+  const sp = speakerProfiles[speakerId];
+  document.getElementById('panelSpeakerName').textContent = speakerName;
+  document.getElementById('panelSpeakerMeta').textContent = `${sp?.segment_count || 0} セグメント`;
+
+  const avatarEl = document.getElementById('panelAvatar');
+  const idx = Object.keys(speakerProfiles).indexOf(speakerId);
+  avatarEl.style.background = AVATAR_COLORS[idx % AVATAR_COLORS.length];
+  avatarEl.textContent = speakerName[0] || '?';
+
+  // Enable buttons
+  document.getElementById('btnSuggest').disabled = false;
+  document.getElementById('btnPreview').disabled = false;
+  document.getElementById('btnSave').disabled = false;
+
+  // Load profile into form
+  const profile = sp?.profile;
+  const wt = profile?.worker_type || 'custom';
+  switchWorkerTab(wt, false);
+
+  // Fill fields
+  setVal('f_speaker_name', profile?.speaker_name || '');
+  setVal('f_instruct', profile?.instruct || '');
+  setVal('f_voice_description', profile?.voice_description || '');
+  setVal('f_reference_audio_path', profile?.reference_audio_path || '');
+  setVal('f_reference_text', profile?.reference_text || '');
+  setSlider('f_speed', profile?.speed ?? 1.0, 'speedVal');
+  setVal('f_pause_before', profile?.pause_ms_before ?? 0);
+  setVal('f_pause_after', profile?.pause_ms_after ?? 300);
+  setVal('f_volume_db', profile?.volume_gain_db ?? 0);
+
+  if (profile?.reference_audio_path) {
+    const fname = profile.reference_audio_path.split('/').pop();
+    document.getElementById('refAudioInfo').textContent = `設定済み: ${fname}`;
+  } else {
+    document.getElementById('refAudioInfo').textContent = '未設定';
+  }
+
+  updateCharCount();
+  clearPreviewAudio();
+  document.getElementById('suggestArea').style.display = 'none';
+  document.getElementById('saveStatus').textContent = '';
+}
+
+function setVal(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.value = val;
+}
+
+function setSlider(sliderId, val, labelId) {
+  const el = document.getElementById(sliderId);
+  if (el) el.value = val;
+  const lbl = document.getElementById(labelId);
+  if (lbl) lbl.textContent = parseFloat(val).toFixed(2);
+}
+
+// ── Worker type tabs ──────────────────────────────────────────────────────────
+
+function switchWorkerTab(wt, dirty = true) {
+  currentWorkerType = wt;
+  ['custom','design','base'].forEach(t => {
+    document.getElementById('tab-' + t)?.classList.toggle('active', t === wt);
+    const panel = document.getElementById('panel-' + t);
+    if (panel) panel.style.display = t === wt ? '' : 'none';
+  });
+  if (dirty) markDirty();
+}
+
+// ── Dirty state ───────────────────────────────────────────────────────────────
+
+function markDirty() { isDirty = true; }
+
+function updateCharCount() {
+  const desc = document.getElementById('f_voice_description')?.value || '';
+  const el = document.getElementById('descCharCount');
+  if (el) el.textContent = desc.length + '文字';
+}
+
+// ── AI voice suggestion ───────────────────────────────────────────────────────
+
+async function suggestVoice() {
+  if (!currentSpeakerId) return;
+  const btn = document.getElementById('btnSuggest');
+  const area = document.getElementById('suggestArea');
+  btn.disabled = true;
+  btn.textContent = '⏳ 提案生成中...';
+  area.style.display = 'block';
+  area.innerHTML = '<p class="text-muted" style="font-size:0.85em">LLMで音声案を生成中...</p>';
+
+  try {
+    const r = await fetch(`/api/projects/${projectId}/speakers/${currentSpeakerId}/suggest_voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sample_count: 8 }),
+    });
+    const data = await r.json().catch(() => ({}));
+
+    if (!data.llm_available) {
+      area.innerHTML = `<p style="color:#c05621;font-size:0.85em">⚠ ${escHtml(data.reason || 'LLMが利用できません')}</p>`;
+      return;
+    }
+    if (!data.suggestions || data.suggestions.length === 0) {
+      area.innerHTML = `<p style="color:#c53030;font-size:0.85em">提案の生成に失敗しました: ${escHtml(data.error || '不明')}</p>`;
+      return;
+    }
+
+    area.innerHTML = '<div style="font-size:0.82em;font-weight:600;color:#5b21b6;margin-bottom:8px">✨ AI提案 (クリックで適用):</div>' +
+      data.suggestions.map((s, i) => {
+        const title = s.worker_type === 'custom'
+          ? `カスタム: ${s.speaker_name || '?'}`
+          : s.worker_type === 'design'
+          ? `デザイン: ${(s.voice_description || '').substring(0,40)}...`
+          : `クローン設定`;
+        const desc = s.instruct || s.voice_description || '';
+        return `<div class="suggest-chip" onclick="applySuggestion(${i})" data-idx="${i}">
+          <div class="suggest-chip-title">${escHtml(title)}</div>
+          ${desc ? `<div class="suggest-chip-desc">${escHtml(desc.substring(0,100))}</div>` : ''}
+          ${s.reason ? `<div class="suggest-chip-reason">根拠: ${escHtml(s.reason.substring(0,80))}</div>` : ''}
+        </div>`;
+      }).join('');
+
+    // Store suggestions for applySuggestion
+    window._lastSuggestions = data.suggestions;
+  } catch(err) {
+    area.innerHTML = `<p style="color:#c53030;font-size:0.85em">エラー: ${escHtml(err.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✨ AI音声提案';
+  }
+}
+
+function applySuggestion(idx) {
+  const s = (window._lastSuggestions || [])[idx];
+  if (!s) return;
+
+  const wt = s.worker_type || 'custom';
+  switchWorkerTab(wt, false);
+
+  if (wt === 'custom') {
+    setVal('f_speaker_name', s.speaker_name || '');
+    setVal('f_instruct', s.instruct || '');
+  } else if (wt === 'design') {
+    setVal('f_voice_description', s.voice_description || '');
+    updateCharCount();
+  }
+  markDirty();
+
+  // Highlight selected suggestion
+  document.querySelectorAll('.suggest-chip').forEach((el, i) => {
+    el.style.background = i === idx ? '#ede9fe' : '';
+    el.style.borderColor = i === idx ? '#7c3aed' : '';
+  });
+}
+
+// ── Reference audio upload ────────────────────────────────────────────────────
+
+async function uploadRefAudio() {
+  const fileInput = document.getElementById('f_ref_audio_file');
+  const file = fileInput.files[0];
+  if (!file || !currentSpeakerId) return;
+
+  const statusEl = document.getElementById('refUploadStatus');
+  statusEl.textContent = 'アップロード中...';
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  try {
+    const r = await fetch(
+      `/api/projects/${projectId}/speakers/${currentSpeakerId}/upload_reference`,
+      { method: 'POST', body: fd }
+    );
+    const data = await r.json().catch(() => ({}));
+    if (r.ok) {
+      setVal('f_reference_audio_path', data.reference_audio_path);
+      document.getElementById('refAudioInfo').textContent = `設定済み: ${data.filename} (${(data.size_bytes/1024).toFixed(0)} KB)`;
+      statusEl.textContent = '✓ アップロード完了';
+      markDirty();
+    } else {
+      statusEl.textContent = '失敗: ' + (data.detail || JSON.stringify(data));
+    }
+  } catch(err) {
+    statusEl.textContent = 'エラー: ' + err.message;
+  }
+}
+
+// ── Voice preview ─────────────────────────────────────────────────────────────
+
+async function generatePreview() {
+  if (!currentSpeakerId) return;
+  const btn = document.getElementById('btnPreview');
+  const errEl = document.getElementById('previewError');
+  const wrapEl = document.getElementById('previewAudioWrap');
+  btn.disabled = true;
+  btn.textContent = '⏳ 生成中...';
+  errEl.style.display = 'none';
+  wrapEl.style.display = 'none';
+
+  const body = buildVoiceBody();
+  body.text = document.getElementById('previewText')?.value || 'こんにちは。';
+
+  try {
+    const r = await fetch(
+      `/api/projects/${projectId}/speakers/${currentSpeakerId}/preview_voice`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+    );
+    const data = await r.json().catch(() => ({}));
+    if (r.ok) {
+      const audio = document.getElementById('previewAudio');
+      audio.src = data.preview_url + '?t=' + Date.now();
+      audio.load();
+      wrapEl.style.display = '';
+      const meta = document.getElementById('previewAudioMeta');
+      if (meta && data.duration_seconds) {
+        meta.textContent = `長さ: ${data.duration_seconds.toFixed(1)}秒  /  ワーカー: ${data.worker_type}`;
+      }
+    } else {
+      errEl.textContent = '生成失敗: ' + (data.detail || JSON.stringify(data));
+      errEl.style.display = '';
+    }
+  } catch(err) {
+    errEl.textContent = 'エラー: ' + err.message;
+    errEl.style.display = '';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ 音声プレビュー生成';
+  }
+}
+
+function clearPreviewAudio() {
+  document.getElementById('previewAudioWrap').style.display = 'none';
+  document.getElementById('previewError').style.display = 'none';
+  const audio = document.getElementById('previewAudio');
+  if (audio) { audio.pause(); audio.src = ''; }
+}
+
+// ── Build voice request body ──────────────────────────────────────────────────
+
+function buildVoiceBody() {
+  return {
+    worker_type: currentWorkerType,
+    language: 'ja',
+    speaker_name: document.getElementById('f_speaker_name')?.value || null,
+    instruct: document.getElementById('f_instruct')?.value || null,
+    voice_description: document.getElementById('f_voice_description')?.value || null,
+    reference_audio_path: document.getElementById('f_reference_audio_path')?.value || null,
+    reference_text: document.getElementById('f_reference_text')?.value || null,
+    speed: parseFloat(document.getElementById('f_speed')?.value || '1.0'),
+  };
+}
+
+// ── Save voice mapping ────────────────────────────────────────────────────────
+
+async function saveVoiceMapping() {
+  if (!currentSpeakerId) return;
+  const statusEl = document.getElementById('saveStatus');
+  const btn = document.getElementById('btnSave');
+  btn.disabled = true;
+  statusEl.textContent = '保存中...';
+  statusEl.style.color = '';
+
+  const profile = {
+    worker_type: currentWorkerType,
+    language: 'ja',
+    speaker_name: document.getElementById('f_speaker_name')?.value || null,
+    instruct: document.getElementById('f_instruct')?.value || null,
+    voice_description: document.getElementById('f_voice_description')?.value || null,
+    reference_audio_path: document.getElementById('f_reference_audio_path')?.value || null,
+    reference_text: document.getElementById('f_reference_text')?.value || null,
+    speed: parseFloat(document.getElementById('f_speed')?.value || '1.0'),
+    pause_ms_before: parseInt(document.getElementById('f_pause_before')?.value || '0'),
+    pause_ms_after: parseInt(document.getElementById('f_pause_after')?.value || '300'),
+    volume_gain_db: parseFloat(document.getElementById('f_volume_db')?.value || '0'),
+    extra_params: {},
+  };
+
+  try {
+    const r = await fetch(`/api/projects/${projectId}/voice_mappings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mappings: [{ speaker_id: currentSpeakerId, profile }],
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok) {
+      statusEl.textContent = '✓ 保存完了';
+      statusEl.style.color = '#276749';
+      isDirty = false;
+      // Update local profile cache
+      if (speakerProfiles[currentSpeakerId]) {
+        speakerProfiles[currentSpeakerId].profile = profile;
+      }
+      // Update cassette indicator
+      updateCassetteSlot(currentSpeakerId, profile);
+    } else {
+      statusEl.textContent = '失敗: ' + (data.detail || JSON.stringify(data));
+      statusEl.style.color = '#c53030';
+    }
+  } catch(err) {
+    statusEl.textContent = 'エラー: ' + err.message;
+    statusEl.style.color = '#c53030';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function updateCassetteSlot(speakerId, profile) {
+  const el = document.getElementById('cassette-' + speakerId);
+  if (!el) return;
+  let tag = '';
+  if (profile.worker_type === 'custom' && profile.speaker_name) {
+    tag = `<span class="cassette-tag">🎤 ${escHtml(profile.speaker_name)}</span>`;
+  } else if (profile.worker_type === 'design' && profile.voice_description) {
+    tag = `<span class="cassette-tag">✍ デザイン設定済み</span>`;
+  } else if (profile.worker_type === 'base' && profile.reference_audio_path) {
+    tag = `<span class="cassette-tag">🎵 クローン設定済み</span>`;
+  } else {
+    tag = `<span class="cassette-tag unset">未設定</span>`;
+  }
+  el.innerHTML = tag;
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+// Auto-select the first speaker on load
+(function() {
+  const firstChip = document.querySelector('.speaker-chip');
+  if (firstChip) {
+    const sid = firstChip.id.replace('chip-', '');
+    const sp = speakerProfiles[sid];
+    if (sp) selectSpeaker(sid, sp.name);
+  }
+})();
+</script>
+{% endblock %}

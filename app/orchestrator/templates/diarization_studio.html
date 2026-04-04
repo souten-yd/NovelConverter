@@ -10,9 +10,15 @@
   <span class="badge badge-{{ project.status }}">{{ project.status }}</span>
 </div>
 
+<!-- Mobile tab bar (hidden on desktop via CSS) -->
+<div class="studio-tabs" id="studioTabs" style="display:none">
+  <button class="studio-tab-btn active" onclick="switchTab('left')" id="tabBtnLeft">⚙ ルール設定</button>
+  <button class="studio-tab-btn" onclick="switchTab('right')" id="tabBtnRight">👁 プレビュー</button>
+</div>
+
 <div class="studio-layout">
   <!-- ═══════════════════════════ LEFT PANE ═══════════════════════════ -->
-  <div class="studio-left">
+  <div class="studio-left tab-active" id="studioLeft">
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <h2 style="margin:0">ルール設定</h2>
@@ -25,11 +31,34 @@
 
       <div id="ruleList"></div>
 
+      <!-- LLM Fallback mode selector -->
+      <div style="margin-top:12px;padding:10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0">
+        <label style="font-size:0.83em;font-weight:600;display:block;margin-bottom:6px">LLM フォールバックモード</label>
+        <select id="llmFallbackMode" class="input" style="font-size:0.85em">
+          <option value="on_error">エラー時のみ (デフォルト)</option>
+          <option value="disabled">無効</option>
+          <option value="always">常に適用</option>
+        </select>
+        <p class="text-muted" style="font-size:0.75em;margin-top:4px">
+          「常に適用」は全セグメントを LLM で正規化します（低速）
+        </p>
+      </div>
+
       <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="runPreview()" id="btnPreview">分析実行</button>
         <button class="btn btn-success" onclick="saveResults()" id="btnSave" disabled>この結果を保存</button>
       </div>
       <div id="previewStatus" class="status-inline" style="margin-top:8px"></div>
+
+      <!-- LLM error details (collapsible) -->
+      <div id="llmErrorPanel" style="display:none;margin-top:12px">
+        <details>
+          <summary style="cursor:pointer;font-size:0.85em;color:#c53030;font-weight:600">
+            ⚠ LLMエラー詳細 (<span id="llmErrorCount">0</span> 件)
+          </summary>
+          <div id="llmErrorList" style="margin-top:8px;font-size:0.8em;max-height:200px;overflow-y:auto"></div>
+        </details>
+      </div>
     </div>
 
     <!-- LLM status widget -->
@@ -44,7 +73,7 @@
   </div>
 
   <!-- ═══════════════════════════ RIGHT PANE ══════════════════════════ -->
-  <div class="studio-right">
+  <div class="studio-right" id="studioRight">
     <div class="card" style="height:100%;box-sizing:border-box">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
         <h2 style="margin:0">プレビュー</h2>
@@ -218,6 +247,44 @@ function getRuleStates() {
   });
 }
 
+function getLlmFallbackMode() {
+  const sel = document.getElementById('llmFallbackMode');
+  return sel ? sel.value : 'on_error';
+}
+
+function renderLlmErrors(errors) {
+  const panel = document.getElementById('llmErrorPanel');
+  const countEl = document.getElementById('llmErrorCount');
+  const listEl = document.getElementById('llmErrorList');
+  if (!errors || errors.length === 0) {
+    if (panel) panel.style.display = 'none';
+    return;
+  }
+  if (panel) panel.style.display = 'block';
+  if (countEl) countEl.textContent = errors.length;
+  if (listEl) {
+    listEl.innerHTML = errors.map((e, i) => `
+      <div style="border:1px solid #fca5a5;border-radius:6px;padding:8px;margin-bottom:6px;background:#fff5f5">
+        <div style="font-weight:600;color:#c53030">バッチ ${i+1}: ${escHtml(e.exception_type || 'Unknown')}</div>
+        <div style="color:#4a5568;margin-top:2px">対象セグメント: [${(e.batch_order_indices || []).join(', ')}]</div>
+        <div style="color:#4a5568">エラー: ${escHtml(e.message || '')}</div>
+        ${e.raw_response_excerpt ? `
+          <details style="margin-top:4px">
+            <summary style="cursor:pointer;font-size:0.9em">LLM応答の先頭</summary>
+            <pre style="font-size:0.8em;white-space:pre-wrap;word-break:break-all;background:#f8f8f8;padding:4px;border-radius:3px">${escHtml(e.raw_response_excerpt)}</pre>
+          </details>` : ''}
+        ${(e.context_snippets || []).length > 0 ? `
+          <details style="margin-top:4px">
+            <summary style="cursor:pointer;font-size:0.9em">前後のセグメント</summary>
+            ${e.context_snippets.map(s => `
+              <div style="font-size:0.85em;padding:2px 4px">
+                #${s.order_index} [${escHtml(s.predicted_speaker)}/${Math.round(s.confidence*100)}%]: ${escHtml(s.text_excerpt)}
+              </div>`).join('')}
+          </details>` : ''}
+      </div>`).join('');
+  }
+}
+
 function resetRules() {
   ruleOrder = Object.keys(allRules);
   renderRuleList();
@@ -313,28 +380,45 @@ async function runPreview() {
   btn.disabled = true;
   status.textContent = '分析中...';
   status.style.color = '';
+  renderLlmErrors([]);
 
   const rules = getRuleStates();
+  const llm_fallback_mode = getLlmFallbackMode();
 
   try {
     const r = await fetch(`/api/projects/${projectId}/preview_diarization`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rules }),
+      body: JSON.stringify({ rules, llm_fallback_mode }),
     });
     if (!r.ok) {
-      const e = await r.json();
-      status.textContent = '失敗: ' + (e.detail || JSON.stringify(e));
+      let errDetail = '';
+      try { const e = await r.json(); errDetail = e.detail || JSON.stringify(e); }
+      catch(_) { errDetail = `HTTP ${r.status}`; }
+      status.textContent = '失敗: ' + errDetail;
       status.style.color = 'red';
       return;
     }
-    previewData = await r.json();
+    const resp = await r.json();
+
+    // Support both old (array) and new ({segments, llm_errors}) response shapes
+    if (Array.isArray(resp)) {
+      previewData = resp;
+    } else {
+      previewData = resp.segments || [];
+      renderLlmErrors(resp.llm_errors || []);
+    }
+
     renderPreview(previewData);
-    status.textContent = `完了: ${previewData.length} セグメント`;
+    const errCount = Array.isArray(resp) ? 0 : (resp.llm_error_count || 0);
+    status.textContent = `完了: ${previewData.length} セグメント${errCount > 0 ? ` (LLMエラー: ${errCount})` : ''}`;
+    status.style.color = errCount > 0 ? '#c05621' : '';
     document.getElementById('btnSave').disabled = false;
+    _maybeAutoSwitchToPreview();
   } catch(err) {
     status.textContent = 'エラー: ' + err.message;
     status.style.color = 'red';
+    console.error('[runPreview] unexpected error:', err);
   } finally {
     btn.disabled = false;
   }
@@ -412,25 +496,34 @@ async function saveResults() {
   if (!confirm('この話者分割結果をプロジェクトに保存しますか？\n（既存の分割結果は上書きされます）')) return;
 
   const rules = getRuleStates();
+  const llm_fallback_mode = getLlmFallbackMode();
   const status = document.getElementById('previewStatus');
   status.textContent = '保存中...';
   document.getElementById('btnSave').disabled = true;
 
-  const r = await fetch(`/api/projects/${projectId}/segment_speakers`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rules }),
-  });
-  if (r.ok) {
-    const d = await r.json();
-    status.textContent = `保存完了: ${d.speaker_count} 話者`;
-    status.style.color = 'green';
-    setTimeout(() => { window.location.href = `/projects/${projectId}`; }, 1200);
-  } else {
-    const e = await r.json();
-    status.textContent = '保存失敗: ' + (e.detail || JSON.stringify(e));
+  try {
+    const r = await fetch(`/api/projects/${projectId}/segment_speakers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rules, llm_fallback_mode }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) {
+      const errCount = d.llm_error_count || 0;
+      status.textContent = `保存完了: ${d.speaker_count} 話者${errCount > 0 ? ` (LLMエラー: ${errCount})` : ''}`;
+      status.style.color = errCount > 0 ? '#c05621' : 'green';
+      if (d.llm_errors) renderLlmErrors(d.llm_errors);
+      setTimeout(() => { window.location.href = `/projects/${projectId}`; }, 1200);
+    } else {
+      status.textContent = '保存失敗: ' + (d.detail || JSON.stringify(d));
+      status.style.color = 'red';
+      document.getElementById('btnSave').disabled = false;
+    }
+  } catch(err) {
+    status.textContent = '保存エラー: ' + err.message;
     status.style.color = 'red';
     document.getElementById('btnSave').disabled = false;
+    console.error('[saveResults] unexpected error:', err);
   }
 }
 
@@ -463,5 +556,50 @@ setInterval(refreshLlmStatus, 8000);
 
 // Also need to patch segment_speakers endpoint to accept optional rules body.
 // The save path calls /segment_speakers with a rules body – handled in processing.py.
+
+// ── Mobile tab switching ──────────────────────────────────────────────────────
+
+function switchTab(which) {
+  const left = document.getElementById('studioLeft');
+  const right = document.getElementById('studioRight');
+  const btnLeft = document.getElementById('tabBtnLeft');
+  const btnRight = document.getElementById('tabBtnRight');
+  if (which === 'left') {
+    left.classList.add('tab-active');
+    right.classList.remove('tab-active');
+    btnLeft.classList.add('active');
+    btnRight.classList.remove('active');
+  } else {
+    right.classList.add('tab-active');
+    left.classList.remove('tab-active');
+    btnRight.classList.add('active');
+    btnLeft.classList.remove('active');
+  }
+}
+
+// Auto-switch to preview tab after analysis completes (mobile only)
+function _maybeAutoSwitchToPreview() {
+  if (window.innerWidth <= 768) {
+    switchTab('right');
+  }
+}
+
+// Show tab bar on mobile
+(function initMobileTabs() {
+  function check() {
+    const tabBar = document.getElementById('studioTabs');
+    if (!tabBar) return;
+    if (window.innerWidth <= 768) {
+      tabBar.style.display = 'flex';
+    } else {
+      tabBar.style.display = 'none';
+      // On desktop, always show both panes
+      document.getElementById('studioLeft').classList.add('tab-active');
+      document.getElementById('studioRight').classList.add('tab-active');
+    }
+  }
+  check();
+  window.addEventListener('resize', check);
+})();
 </script>
 {% endblock %}
