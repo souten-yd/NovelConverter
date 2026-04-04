@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.shared.database import init_db
 from app.shared.logger import get_logger
-from app.orchestrator.routers import projects, processing, segments, voice_mapping, render, ui, llm
+from app.orchestrator.routers import projects, processing, segments, voice_mapping, render, ui, llm, characters
 from app.orchestrator.routers.voice_mapping import tts_router
 
 logger = get_logger("orchestrator")
@@ -36,6 +36,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(projects.router)
 app.include_router(processing.router)
 app.include_router(segments.router)
+app.include_router(characters.router)
 app.include_router(voice_mapping.router)
 app.include_router(tts_router)
 app.include_router(render.router)

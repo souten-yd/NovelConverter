@@ -12,10 +12,9 @@
 </div>
 
 <div class="filter-bar">
-  <label>フィルター:
+  <label>話者:
     <select id="filterSpeaker" onchange="applyFilter()">
       <option value="">全話者</option>
-      <option value="unknown">unknown のみ</option>
       {% set speakers = [] %}
       {% for seg in segments %}
         {% if seg.predicted_speaker not in speakers %}
@@ -35,7 +34,38 @@
       <option value="high">高(≥0.8)</option>
     </select>
   </label>
+  <label>章:
+    <select id="filterChapter" onchange="applyFilter()">
+      <option value="">全章</option>
+      {% set chapters = [] %}
+      {% for seg in segments %}
+        {% if seg.chapter_index not in chapters %}{% set _ = chapters.append(seg.chapter_index) %}{% endif %}
+      {% endfor %}
+      {% for ch in chapters | sort %}
+        <option value="{{ ch }}">第{{ ch }}章</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="filter-check">
+    <input type="checkbox" id="filterNeedsReview" onchange="applyFilter()">
+    要確認{% if needs_review_count > 0 %} ({{ needs_review_count }}){% endif %}
+  </label>
+  <label class="filter-check">
+    <input type="checkbox" id="filterUnknown" onchange="applyFilter()">
+    unknown のみ
+  </label>
   <span id="visibleCount" class="text-muted"></span>
+</div>
+
+<!-- Speaker view modal -->
+<div id="speakerModal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="speakerModalTitle">話者発話一覧</h3>
+      <button onclick="closeSpeakerModal()" class="btn btn-sm">✕</button>
+    </div>
+    <div id="speakerModalBody" class="modal-body"></div>
+  </div>
 </div>
 
 <div id="segmentTable">
@@ -43,7 +73,9 @@
 <div class="seg-row conf-{{ 'low' if seg.confidence < 0.5 else ('mid' if seg.confidence < 0.8 else 'high') }}"
      data-speaker="{{ seg.predicted_speaker }}"
      data-conf="{{ seg.confidence }}"
-     data-id="{{ seg.id }}">
+     data-id="{{ seg.id }}"
+     data-chapter="{{ seg.chapter_index }}"
+     data-needs-review="{{ 'true' if seg.needs_review else 'false' }}">
   <div class="seg-meta">
     <span class="seg-order">#{{ seg.order_index }}</span>
     <span class="seg-type badge badge-type-{{ seg.segment_type }}">{{ seg.segment_type }}</span>
@@ -51,23 +83,41 @@
       {{ "%.0f"|format(seg.confidence * 100) }}%
     </span>
     <span class="seg-chap">章{{ seg.chapter_index }}</span>
+    {% if seg.needs_review %}<span class="badge badge-review" title="要確認">⚠</span>{% endif %}
   </div>
   <div class="seg-text">{{ seg.normalized_text }}</div>
   <div class="seg-controls">
     <div class="control-group">
-      <label>推定話者: <strong>{{ seg.predicted_speaker }}</strong></label>
+      <label>推定話者: <strong>{{ seg.predicted_speaker }}</strong>
+        <button class="btn btn-xs btn-outline" onclick="showSpeakerView('{{ seg.predicted_speaker }}')">一覧</button>
+      </label>
       <label>確定話者:
+        <select class="input input-sm final-speaker-select" data-seg-id="{{ seg.id }}">
+          <option value="">-- 選択 --</option>
+          {% for sp in speaker_names %}
+          <option value="{{ sp }}" {{ 'selected' if seg.final_speaker == sp }}>{{ sp }}</option>
+          {% endfor %}
+          <option value="unknown" {{ 'selected' if seg.final_speaker == 'unknown' }}>unknown</option>
+          <option value="narrator" {{ 'selected' if seg.final_speaker == 'narrator' }}>narrator</option>
+          <option value="protagonist" {{ 'selected' if seg.final_speaker == 'protagonist' }}>protagonist</option>
+        </select>
         <input type="text"
                class="input input-sm final-speaker-input"
                data-seg-id="{{ seg.id }}"
                value="{{ seg.final_speaker or '' }}"
-               placeholder="{{ seg.predicted_speaker }}">
+               placeholder="または直接入力">
+      </label>
+      <label>修正理由:
+        <input type="text"
+               class="input input-sm correction-reason-input"
+               data-seg-id="{{ seg.id }}"
+               placeholder="任意">
       </label>
     </div>
     <div class="control-group">
       <label>type:
         <select class="input input-sm seg-type-select" data-seg-id="{{ seg.id }}">
-          {% for t in ['narration','dialogue','thought','unknown'] %}
+          {% for t in ['narration','dialogue','thought','monologue','unknown'] %}
           <option value="{{ t }}" {{ 'selected' if seg.segment_type == t }}>{{ t }}</option>
           {% endfor %}
         </select>
@@ -80,6 +130,14 @@
     </div>
     {% endif %}
   </div>
+  {% if seg.evidence_spans %}
+  <details class="seg-evidence">
+    <summary class="text-small text-muted">根拠 ({{ seg.evidence_spans | length }}件)</summary>
+    <ul class="evidence-list">
+      {% for ev in seg.evidence_spans %}<li>{{ ev }}</li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
   <div class="seg-reason text-small text-muted">{{ seg.reason }}</div>
 </div>
 {% endfor %}
@@ -92,12 +150,45 @@
 <script>
 const projectId = '{{ project.id }}';
 const pendingChanges = {};
+// Store all segment data for speaker view
+const allSegments = [
+  {% for seg in segments %}
+  {
+    orderId: {{ seg.order_index }},
+    speaker: "{{ seg.predicted_speaker | e }}",
+    finalSpeaker: "{{ seg.final_speaker or '' | e }}",
+    text: {{ seg.normalized_text | tojson }},
+    type: "{{ seg.segment_type }}",
+    conf: {{ seg.confidence }}
+  },
+  {% endfor %}
+];
 
+// ── Dropdown select listeners ─────────────────────────────────────────────
+document.querySelectorAll('.final-speaker-select').forEach(sel => {
+  sel.addEventListener('change', () => {
+    const segId = sel.dataset.segId;
+    const val = sel.value;
+    if (val) {
+      pendingChanges[segId] = pendingChanges[segId] || {id: segId};
+      pendingChanges[segId].final_speaker = val;
+      // Sync text input
+      const textInput = document.querySelector(`.final-speaker-input[data-seg-id="${segId}"]`);
+      if (textInput) textInput.value = val;
+    }
+  });
+});
+
+// ── Text input listeners ──────────────────────────────────────────────────
 document.querySelectorAll('.final-speaker-input').forEach(input => {
   input.addEventListener('input', () => {
-    pendingChanges[input.dataset.segId] = pendingChanges[input.dataset.segId] || {};
-    pendingChanges[input.dataset.segId].final_speaker = input.value;
-    pendingChanges[input.dataset.segId].id = input.dataset.segId;
+    const segId = input.dataset.segId;
+    pendingChanges[segId] = pendingChanges[segId] || {id: segId};
+    pendingChanges[segId].final_speaker = input.value;
+    pendingChanges[segId].id = segId;
+    // Sync dropdown
+    const sel = document.querySelector(`.final-speaker-select[data-seg-id="${segId}"]`);
+    if (sel) sel.value = input.value;
   });
 });
 
@@ -109,6 +200,15 @@ document.querySelectorAll('.seg-type-select').forEach(sel => {
   });
 });
 
+document.querySelectorAll('.correction-reason-input').forEach(input => {
+  input.addEventListener('input', () => {
+    const segId = input.dataset.segId;
+    pendingChanges[segId] = pendingChanges[segId] || {id: segId};
+    pendingChanges[segId].correction_reason = input.value;
+  });
+});
+
+// ── Save ──────────────────────────────────────────────────────────────────
 async function saveAll() {
   const updates = Object.values(pendingChanges).filter(u => u.id);
   if (!updates.length) { alert('変更はありません'); return; }
@@ -124,28 +224,87 @@ async function saveAll() {
     status.className = 'save-status success';
     Object.keys(pendingChanges).forEach(k => delete pendingChanges[k]);
     setTimeout(() => status.className = 'save-status hidden', 3000);
+    // Clear needs_review badge on updated rows
+    updates.forEach(u => {
+      const row = document.querySelector(`.seg-row[data-id="${u.id}"]`);
+      if (row) {
+        row.querySelector('.badge-review')?.remove();
+        row.dataset.needsReview = 'false';
+      }
+    });
+    // Trigger consistency re-pass (non-blocking)
+    _triggerRepass();
   } else {
     status.textContent = '保存失敗';
     status.className = 'save-status error';
   }
 }
 
+async function _triggerRepass() {
+  try {
+    await fetch(`/api/projects/${projectId}/segments/consistency_repass`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({threshold: 0.65})
+    });
+  } catch(e) { /* non-critical */ }
+}
+
+// ── Filter ────────────────────────────────────────────────────────────────
 function applyFilter() {
   const spFilter = document.getElementById('filterSpeaker').value;
   const confFilter = document.getElementById('filterConf').value;
+  const chapFilter = document.getElementById('filterChapter').value;
+  const needsReview = document.getElementById('filterNeedsReview').checked;
+  const unknownOnly = document.getElementById('filterUnknown').checked;
   let visible = 0;
   document.querySelectorAll('.seg-row').forEach(row => {
     const sp = row.dataset.speaker;
     const conf = parseFloat(row.dataset.conf);
+    const chap = row.dataset.chapter;
+    const nr = row.dataset.needsReview === 'true';
     let show = true;
     if (spFilter && sp !== spFilter) show = false;
     if (confFilter === 'low' && conf >= 0.5) show = false;
     if (confFilter === 'mid' && (conf < 0.5 || conf >= 0.8)) show = false;
     if (confFilter === 'high' && conf < 0.8) show = false;
+    if (chapFilter && chap !== chapFilter) show = false;
+    if (needsReview && !nr) show = false;
+    if (unknownOnly && sp !== 'unknown') show = false;
     row.style.display = show ? '' : 'none';
     if (show) visible++;
   });
   document.getElementById('visibleCount').textContent = `${visible} 件表示`;
+}
+
+// ── Speaker view modal ────────────────────────────────────────────────────
+function showSpeakerView(speakerName) {
+  const filtered = allSegments.filter(s =>
+    s.speaker === speakerName || s.finalSpeaker === speakerName
+  );
+  document.getElementById('speakerModalTitle').textContent =
+    `「${speakerName}」の発話一覧 (${filtered.length}件)`;
+  const body = document.getElementById('speakerModalBody');
+  if (!filtered.length) {
+    body.innerHTML = '<p class="text-muted">発話なし</p>';
+  } else {
+    body.innerHTML = filtered.map(s =>
+      `<div class="modal-seg">
+        <span class="text-muted">#${s.orderId} [${s.type}]</span>
+        <div>${escapeHtml(s.text.substring(0, 120))}${s.text.length > 120 ? '…' : ''}</div>
+      </div>`
+    ).join('');
+  }
+  document.getElementById('speakerModal').classList.remove('hidden');
+}
+
+function closeSpeakerModal() {
+  document.getElementById('speakerModal').classList.add('hidden');
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+            .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
 
 function playAudio(segId, filename, projectId) {
@@ -161,4 +320,21 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('visibleCount').textContent = `${count} 件表示`;
 });
 </script>
+
+<style>
+.filter-check { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; }
+.badge-review { background: #f59e0b; color: white; border-radius: 4px; padding: 1px 5px; font-size: 0.75rem; }
+.seg-evidence { margin-top: 4px; }
+.evidence-list { margin: 4px 0 0 16px; padding: 0; font-size: 0.8rem; color: #555; }
+.evidence-list li { margin-bottom: 2px; }
+.modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.modal.hidden { display: none; }
+.modal-content { background: white; border-radius: 8px; width: min(640px, 95vw); max-height: 80vh; display: flex; flex-direction: column; overflow: hidden; }
+.modal-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #e5e7eb; }
+.modal-body { overflow-y: auto; padding: 12px 16px; }
+.modal-seg { padding: 6px 0; border-bottom: 1px solid #f3f4f6; }
+.final-speaker-input { width: 120px; }
+.correction-reason-input { width: 200px; }
+.btn-xs { padding: 1px 6px; font-size: 0.7rem; }
+</style>
 {% endblock %}

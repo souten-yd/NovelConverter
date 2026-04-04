@@ -20,6 +20,7 @@ from app.shared.logger import get_logger
 from app.orchestrator.services.preprocessor import preprocess, _normalize_whitespace, _split_chapters, _split_body
 from app.orchestrator.services.speaker_segmenter import (
     segment_speakers,
+    segment_speakers_enhanced,
     build_speaker_list,
     AVAILABLE_RULES,
     DiarizationConfig,
@@ -118,7 +119,7 @@ def preprocess_project(project_id: str, db: Session = Depends(get_db)):
         f"trimmed_chars={stage_stats['trimmed_chars']} normalized_chars={stage_stats['normalized_chars']} "
         f"chapters={stage_stats['chapter_count']} body_candidates={stage_stats['body_segment_candidates']}"
     )
-    raw_segments = preprocess(raw_text)
+    raw_segments, _norm_logs = preprocess(raw_text)
 
     if not raw_segments:
         project_dir = text_path.parent
@@ -163,6 +164,9 @@ class RuleSpecIn(BaseModel):
 class SegmentSpeakersRequest(BaseModel):
     rules: Optional[List[RuleSpecIn]] = None
     llm_fallback_mode: str = "on_error"  # disabled | on_error | always
+    use_enhanced_pipeline: bool = False   # True → segment_speakers_enhanced()
+    rebuild_char_dict: bool = True        # rebuild character dict before segmenting
+    consistency_pass_threshold: float = 0.65
 
 
 def _build_config(body: Optional[SegmentSpeakersRequest]) -> Optional[DiarizationConfig]:
@@ -221,6 +225,8 @@ def segment_speakers_endpoint(
     db.commit()
     job_id = job.id
 
+    use_enhanced = bool(body and body.use_enhanced_pipeline)
+
     def _bg_segment():
         start_time = time.time()
         bg_db = SessionLocal()
@@ -231,16 +237,25 @@ def segment_speakers_endpoint(
                 for s in seg_data
             ]
 
-            # Update job: rule-based pass
             _update_seg_job(bg_db, job_id, "rule_based", "ルールベース分類中", 10, 0, total_segs)
-
-            logger.info(f"Speaker segmentation start: project={project_id} segments={total_segs}")
-            annotated, llm_errors = segment_speakers(
-                raw_segments, config=config,
-                progress_cb=lambda stage, pct, cur, total: _update_seg_job(
-                    bg_db, job_id, stage, _seg_stage_label(stage), pct, cur, total
-                ),
+            logger.info(
+                f"Speaker segmentation start: project={project_id} segments={total_segs} "
+                f"enhanced={use_enhanced}"
             )
+
+            def _pcb(stage, pct, cur=0, total=0):
+                _update_seg_job(bg_db, job_id, stage, _seg_stage_label(stage), pct, cur, total)
+
+            if use_enhanced:
+                annotated, llm_errors = segment_speakers_enhanced(
+                    raw_segments, config=config,
+                    project_id=project_id, db=bg_db,
+                    progress_cb=_pcb,
+                )
+            else:
+                annotated, llm_errors = segment_speakers(
+                    raw_segments, config=config, progress_cb=_pcb,
+                )
 
             # Save results to DB
             _update_seg_job(bg_db, job_id, "saving", "結果保存中", 90, 0, total_segs)
@@ -252,6 +267,7 @@ def segment_speakers_endpoint(
                 .order_by(Segment.order_index)
                 .all()
             )
+            needs_review_count = 0
             for seg in segs:
                 a = ann_map.get(seg.order_index)
                 if a:
@@ -259,6 +275,16 @@ def segment_speakers_endpoint(
                     seg.predicted_speaker = a.predicted_speaker
                     seg.confidence = a.confidence
                     seg.reason = a.reason
+                    # Enhanced fields (no-op if columns don't exist on old schema,
+                    # but _migrate_columns ensures they do)
+                    if use_enhanced:
+                        seg.candidates = a.candidates or []
+                        seg.evidence_spans = a.evidence_spans or []
+                        seg.needs_review = bool(a.needs_review)
+                        seg.monologue_subtype = a.monologue_subtype
+                        seg.rule_log = a.rule_log or []
+                        if seg.needs_review:
+                            needs_review_count += 1
 
             bg_db.query(Speaker).filter(Speaker.project_id == project_id).delete()
             speaker_list = build_speaker_list(annotated)
@@ -291,6 +317,8 @@ def segment_speakers_endpoint(
                     "speaker_count": len(speaker_list),
                     "llm_errors": llm_errors,
                     "llm_error_count": len(llm_errors),
+                    "needs_review_count": needs_review_count,
+                    "enhanced_pipeline": use_enhanced,
                     "elapsed_seconds": round(time.time() - start_time, 1),
                 }
 
@@ -298,7 +326,7 @@ def segment_speakers_endpoint(
             elapsed = round(time.time() - start_time, 1)
             logger.info(
                 f"Speaker segmentation done: project={project_id} speakers={len(speaker_list)} "
-                f"llm_errors={len(llm_errors)} elapsed={elapsed}s"
+                f"needs_review={needs_review_count} llm_errors={len(llm_errors)} elapsed={elapsed}s"
             )
         except Exception as exc:
             logger.exception(f"Speaker segmentation failed: project={project_id}")
@@ -338,6 +366,10 @@ def _seg_stage_label(stage: str) -> str:
         "saving": "結果保存中",
         "complete": "完了",
         "failed": "失敗",
+        # Enhanced pipeline stages
+        "char_dict_build": "キャラクター辞書構築中",
+        "candidate_gen": "候補話者生成中",
+        "consistency_pass": "整合性チェック中",
     }
     return labels.get(stage, stage)
 
@@ -369,6 +401,8 @@ def get_diarization_rules(project_id: str):
 class PreviewDiarizationRequest(BaseModel):
     rules: List[RuleSpecIn]
     llm_fallback_mode: str = "on_error"  # disabled | on_error | always
+    use_enhanced_pipeline: bool = False   # True → segment_speakers_enhanced()
+    consistency_pass_threshold: float = 0.65
 
 
 @router.post("/{project_id}/preview_diarization")
@@ -404,7 +438,18 @@ def preview_diarization(
         llm_fallback_mode=body.llm_fallback_mode,
     )
 
-    annotated, llm_errors = segment_speakers(raw_segments, config=config)
+    if body.use_enhanced_pipeline:
+        from app.orchestrator.services.character_builder import load_character_dict
+        char_dict = load_character_dict(project_id, db)
+        annotated, llm_errors = segment_speakers_enhanced(
+            raw_segments,
+            config=config,
+            char_dict=char_dict,
+            project_id=project_id,
+            db=db,
+        )
+    else:
+        annotated, llm_errors = segment_speakers(raw_segments, config=config)
 
     segments_out = [
         {
@@ -416,6 +461,8 @@ def preview_diarization(
             "confidence": round(a.confidence, 3),
             "reason": a.reason,
             "is_chapter_header": a.is_chapter_header,
+            "needs_review": getattr(a, "needs_review", False),
+            "candidates": getattr(a, "candidates", []),
         }
         for a in annotated
     ]

@@ -50,6 +50,7 @@ class SegmentOut(BaseModel):
 class SegmentUpdate(BaseModel):
     final_speaker: Optional[str] = None
     segment_type: Optional[str] = None
+    correction_reason: Optional[str] = None  # stored in review_logs
 
 
 class SegmentsBatchUpdate(BaseModel):
@@ -169,3 +170,64 @@ class ArtifactOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── Character master ──────────────────────────────────────────────────────────
+
+class CharacterMasterOut(BaseModel):
+    id: str
+    project_id: str
+    canonical_name: str
+    aliases: List[str]
+    first_person_pronouns: List[str]
+    speech_style_hints: List[str]
+    honorifics_used: List[str]
+    gender_hint: Optional[str]
+    role_hint: Optional[str]
+    segment_count: int
+
+    model_config = {"from_attributes": True}
+
+
+class CharacterMasterCreate(BaseModel):
+    canonical_name: str
+    aliases: List[str] = []
+    first_person_pronouns: List[str] = []
+    speech_style_hints: List[str] = []
+    honorifics_used: List[str] = []
+    gender_hint: Optional[str] = None
+    role_hint: Optional[str] = None
+
+
+class CharacterMasterUpdate(BaseModel):
+    canonical_name: Optional[str] = None
+    aliases: Optional[List[str]] = None
+    first_person_pronouns: Optional[List[str]] = None
+    speech_style_hints: Optional[List[str]] = None
+    honorifics_used: Optional[List[str]] = None
+    gender_hint: Optional[str] = None
+    role_hint: Optional[str] = None
+
+
+# ── Review log ────────────────────────────────────────────────────────────────
+
+class ReviewLogOut(BaseModel):
+    id: str
+    project_id: str
+    segment_id: str
+    predicted_speaker: Optional[str]
+    predicted_confidence: Optional[float]
+    corrected_speaker: Optional[str]
+    predicted_type: Optional[str]
+    corrected_type: Optional[str]
+    correction_reason: Optional[str]
+    corrected_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ── Enhanced pipeline request ─────────────────────────────────────────────────
+
+class ConsistencyRepassRequest(BaseModel):
+    chapter_index: Optional[int] = None   # None = all chapters
+    threshold: float = 0.65

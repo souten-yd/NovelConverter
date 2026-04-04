@@ -38,5 +38,5 @@ def test_analyze_segmentation_stages_empty_text():
 
 
 def test_preprocess_fallback_non_empty_text():
-    segments = preprocess("line1\nline2")
+    segments, _ = preprocess("line1\nline2")
     assert len(segments) >= 1
