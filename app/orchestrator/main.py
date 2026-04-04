@@ -57,8 +57,33 @@ def _log_ocr_engine_status() -> None:
         from app.orchestrator.services.ocr.factory import list_engines
         engines = list_engines()
         for eng in engines:
-            status = "OK" if eng["available"] else f"UNAVAILABLE: {eng['missing_deps']}"
-            logger.info(f"OCR engine [{eng['id']}] {eng['name']}: {status}")
+            if eng["available"]:
+                logger.info(f"OCR engine [{eng['id']}] {eng['name']}: OK")
+            else:
+                logger.warning(
+                    f"OCR engine [{eng['id']}] {eng['name']}: UNAVAILABLE – "
+                    f"{eng['missing_deps']}"
+                )
+        # Extra detail for PaddleOCR version
+        try:
+            from app.orchestrator.services.ocr.paddleocr_engine import _get_paddleocr_version
+            logger.info(f"PaddleOCR installed version: {_get_paddleocr_version()}")
+        except Exception:
+            pass
+        # Extra detail for NDLOCR-Lite
+        try:
+            from app.orchestrator.services.ocr.ndlocr_lite_engine import get_ndlocr_status
+            ndl_status = get_ndlocr_status()
+            logger.info(
+                f"NDLOCR-Lite status – installed={ndl_status['installed']} "
+                f"cli_ok={ndl_status['cli_functional']} "
+                f"models={ndl_status['model_files_present']} "
+                f"model_path={ndl_status['model_path']}"
+            )
+            if ndl_status["error_message"]:
+                logger.warning(f"NDLOCR-Lite: {ndl_status['error_message']}")
+        except Exception:
+            pass
     except Exception as exc:
         logger.warning(f"OCR engine status check failed at startup: {exc}")
 
@@ -73,6 +98,34 @@ def list_ocr_engines():
     """List available OCR engines with their status."""
     from app.orchestrator.services.ocr.factory import list_engines
     return list_engines()
+
+
+@app.get("/api/ocr/engines/ndlocr_lite/status")
+def ndlocr_lite_status():
+    """Detailed runtime status for the NDLOCR-Lite engine.
+
+    Returns installed / cli_functional / model_files_present / runtime_ready
+    and the model_path so operators can confirm what is (or isn't) set up.
+    """
+    from app.orchestrator.services.ocr.ndlocr_lite_engine import get_ndlocr_status
+    return get_ndlocr_status()
+
+
+@app.get("/api/ocr/engines/paddleocr/status")
+def paddleocr_status():
+    """Detailed runtime status for the PaddleOCR engine."""
+    from app.orchestrator.services.ocr.paddleocr_engine import (
+        _get_paddleocr_version,
+        PaddleOCREngine,
+    )
+    version = _get_paddleocr_version()
+    init_error = PaddleOCREngine._init_error
+    return {
+        "version": version,
+        "instance_ready": PaddleOCREngine._ocr_instance is not None,
+        "init_error": init_error,
+        "runtime_ready": init_error is None,
+    }
 
 
 @app.get("/api/health/dependencies")
