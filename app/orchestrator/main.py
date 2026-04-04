@@ -47,6 +47,19 @@ app.include_router(ui.router)  # must be last (catch-all pages)
 def on_startup():
     init_db()
     logger.info("NovelConverter Orchestrator started")
+    _log_ocr_engine_status()
+
+
+def _log_ocr_engine_status() -> None:
+    """Log availability of all OCR engines at startup."""
+    try:
+        from app.orchestrator.services.ocr.factory import list_engines
+        engines = list_engines()
+        for eng in engines:
+            status = "OK" if eng["available"] else f"UNAVAILABLE: {eng['missing_deps']}"
+            logger.info(f"OCR engine [{eng['id']}] {eng['name']}: {status}")
+    except Exception as exc:
+        logger.warning(f"OCR engine status check failed at startup: {exc}")
 
 
 @app.get("/health")

@@ -24,7 +24,7 @@
   <div class="step-card {{ 'step-done' if project.raw_text_path else 'step-current' }}">
     <div class="step-num">1</div>
     <div class="step-body">
-      <h3>原稿アップロー���（txt / zip / rar / epub / 画像）</h3>
+      <h3>原稿アップロード（txt / zip / rar / epub / 画像）</h3>
       {% if project.raw_text_path %}
         <p class="text-success">✓ アップロード済み</p>
         <p class="text-small">{{ project.uploaded_filename or project.raw_text_path.split('/')[-1] }}</p>
@@ -54,9 +54,9 @@
           <input type="file" id="txtFile" accept=".txt,.zip,.rar,.epub,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.tif,application/x-rar-compressed,application/vnd.rar,application/zip,application/epub+zip" class="input">
           <div style="font-size:0.75em;color:#64748b;margin-top:2px">
             対応形式: txt, zip, rar, epub, 画像 (png/jpg/webp/bmp/tiff)
-            <br>※ iOSではRAR形式が選択できない場合があります。ZIP形式を推奨し���す。
+            <br>※ iOSではRAR形式が選択できない場合があります。ZIP形式を推奨します。
           </div>
-          <button type="button" class="btn btn-primary" onclick="uploadText()" id="btnUpload" style="margin-top:8px">ア���プロード</button>
+          <button type="button" class="btn btn-primary" onclick="uploadText()" id="btnUpload" style="margin-top:8px">アップロード</button>
         </form>
         <!-- Progress UI (hidden initially, also shown on reload recovery) -->
         <div id="uploadProgress" style="display:none;margin-top:12px">

@@ -1,4 +1,10 @@
-"""Qwen-VL vision-language model OCR engine adapter."""
+"""Qwen-VL vision-language model OCR engine adapter.
+
+Supports two modes:
+  1. Remote API  – set LLM_API_URL (and optionally LLM_API_KEY / LLM_MODEL)
+  2. Local model – requires transformers + GPU; model is lazy-loaded on first use
+                   (downloaded to HF_HOME on first inference)
+"""
 from __future__ import annotations
 
 import os
@@ -10,34 +16,44 @@ from app.shared.logger import get_logger
 
 logger = get_logger("ocr.qwen_vl")
 
+# Lazy-loaded model + processor (local mode)
+_local_model = None
+_local_processor = None
+_local_model_id: str = ""
+
 
 class QwenVLEngine(OCREngine):
     engine_id = "qwen_vl"
     display_name = "Qwen-VL"
-    description = "視覚LLMベースOCR。高精度だが処理が重い。GPU必須。LLM APIまたはローカル推論。"
+    description = "視覚LLMベースOCR。高精度。LLM_API_URLでリモートAPI利用可。GPU環境ではローカル推論も可。"
 
     def is_available(self) -> tuple[bool, str]:
-        # Qwen-VL can be used via:
-        # 1. Remote API (LLM_API_URL with vision support)
-        # 2. Local transformers model
-        llm_url = os.environ.get("LLM_API_URL", "")
-        if llm_url:
+        # Mode 1: Remote API – always available if URL is configured
+        if os.environ.get("LLM_API_URL", ""):
             return True, ""
 
+        # Mode 2: Local transformers inference
         missing = []
         try:
             import transformers  # noqa: F401
         except ImportError:
             missing.append("transformers (pip install transformers)")
+
         try:
             import torch  # noqa: F401
-            if not torch.cuda.is_available():
-                missing.append("CUDA GPU (Qwen-VL requires GPU)")
         except ImportError:
             missing.append("torch (pip install torch)")
 
         if missing:
-            return False, ", ".join(missing) + " (またはLLM_API_URLを設定してリモートAPI経由で利用)"
+            return (
+                False,
+                ", ".join(missing)
+                + " (またはLLM_API_URLを設定してリモートAPI経由で利用)",
+            )
+
+        # transformers + torch are present; GPU availability is checked at
+        # inference time so we report available even without a current GPU
+        # (RunPod attaches the GPU at container start, not at build time).
         return True, ""
 
     def get_preprocessing_strategies(self) -> list[str]:
@@ -45,9 +61,18 @@ class QwenVLEngine(OCREngine):
 
     def get_dependencies_info(self) -> dict:
         return {
-            "python_packages": ["transformers>=4.44.0", "torch>=2.3.0", "accelerate>=0.30.0"],
+            "python_packages": [
+                "transformers>=4.45.0",
+                "torch>=2.3.0",
+                "accelerate>=0.30.0",
+                "qwen-vl-utils",
+            ],
             "system_packages": [],
-            "notes": "LLM_API_URL環境変数でリモートAPI経由でも利用可能。ローカル推論にはGPU(VRAM 16GB+)が必要。",
+            "notes": (
+                "LLM_API_URL環境変数でリモートAPI経由でも利用可能。"
+                "ローカル推論にはGPU(VRAM 10GB+)が必要。"
+                "モデルは初回推論時に自動ダウンロードされます。"
+            ),
         }
 
     def extract_text(
@@ -58,20 +83,22 @@ class QwenVLEngine(OCREngine):
     ) -> tuple[str, list[str]]:
         warnings: list[str] = []
 
-        # Try remote API first
         llm_url = os.environ.get("LLM_API_URL", "")
         if llm_url:
-            return self._extract_via_api(image_path, llm_url, lang, warnings)
+            return self._extract_via_api(image_path, llm_url, warnings)
 
-        # Fall back to local model
-        return self._extract_local(image_path, lang, warnings)
+        return self._extract_local(image_path, warnings)
+
+    # ── Remote API ─────────────────────────────────────────────────────────────
 
     def _extract_via_api(
-        self, image_path: Path, llm_url: str, lang: str, warnings: list[str]
+        self,
+        image_path: Path,
+        llm_url: str,
+        warnings: list[str],
     ) -> tuple[str, list[str]]:
-        """Use a vision-capable LLM API for OCR."""
+        """Use a vision-capable LLM API (OpenAI-compatible) for OCR."""
         import base64
-        import json
         import requests
 
         try:
@@ -79,9 +106,13 @@ class QwenVLEngine(OCREngine):
                 img_b64 = base64.b64encode(f.read()).decode("utf-8")
 
             suffix = image_path.suffix.lower().lstrip(".")
-            mime = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp", "bmp": "bmp", "tiff": "tiff", "tif": "tiff"}.get(suffix, "jpeg")
+            mime = {
+                "jpg": "jpeg", "jpeg": "jpeg", "png": "png",
+                "webp": "webp", "bmp": "bmp",
+                "tiff": "tiff", "tif": "tiff",
+            }.get(suffix, "jpeg")
 
-            headers = {"Content-Type": "application/json"}
+            headers: dict = {"Content-Type": "application/json"}
             api_key = os.environ.get("LLM_API_KEY", "")
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
@@ -92,8 +123,19 @@ class QwenVLEngine(OCREngine):
                     {
                         "role": "user",
                         "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/{mime};base64,{img_b64}"}},
-                            {"type": "text", "text": "この画像に含まれるテキストをすべて抽出してください。テキストのみを返してください。"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/{mime};base64,{img_b64}"
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": (
+                                    "この画像に含まれるテキストをすべて抽出してください。"
+                                    "テキストのみを返してください。"
+                                ),
+                            },
                         ],
                     }
                 ],
@@ -122,11 +164,123 @@ class QwenVLEngine(OCREngine):
             logger.warning(f"Qwen-VL API error for {image_path.name}: {exc}")
             return "", warnings
 
+    # ── Local transformers inference ────────────────────────────────────────────
+
     def _extract_local(
-        self, image_path: Path, lang: str, warnings: list[str]
+        self,
+        image_path: Path,
+        warnings: list[str],
     ) -> tuple[str, list[str]]:
-        """Local Qwen-VL inference (requires GPU + large model)."""
-        warnings.append(
-            "Qwen-VL ローカル推論は未実装です。LLM_API_URL を設定してリモートAPI経由で利用してください。"
-        )
-        return "", warnings
+        """Local Qwen2-VL inference via HuggingFace transformers."""
+        global _local_model, _local_processor, _local_model_id
+
+        try:
+            import torch
+        except ImportError:
+            warnings.append("Qwen-VL local: torch not installed")
+            return "", warnings
+
+        try:
+            from transformers import (
+                Qwen2VLForConditionalGeneration,
+                AutoProcessor,
+            )
+        except ImportError:
+            warnings.append("Qwen-VL local: transformers not installed or too old (need >=4.45)")
+            return "", warnings
+
+        if not torch.cuda.is_available():
+            warnings.append(
+                "Qwen-VL local: GPU not available. "
+                "LLM_API_URL を設定してリモートAPI経由で利用してください。"
+            )
+            return "", warnings
+
+        model_id = os.environ.get("QWEN_VL_MODEL", "Qwen/Qwen2-VL-7B-Instruct")
+
+        try:
+            # Lazy-load model once
+            if _local_model is None or _local_model_id != model_id:
+                logger.info(f"Qwen-VL: loading model {model_id} (first use, may download)...")
+                _local_processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+                _local_model = Qwen2VLForConditionalGeneration.from_pretrained(
+                    model_id,
+                    torch_dtype=torch.float16,
+                    device_map="auto",
+                    trust_remote_code=True,
+                )
+                _local_model.eval()
+                _local_model_id = model_id
+                logger.info(f"Qwen-VL: model loaded: {model_id}")
+        except Exception as exc:
+            warnings.append(f"Qwen-VL model load failed ({model_id}): {exc}")
+            logger.error(f"Qwen-VL model load error: {exc}")
+            return "", warnings
+
+        try:
+            from PIL import Image
+
+            image = Image.open(image_path).convert("RGB")
+
+            # Build messages in the Qwen2-VL chat format
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image},
+                        {
+                            "type": "text",
+                            "text": "この画像に含まれるテキストをすべて抽出してください。テキストのみを返してください。",
+                        },
+                    ],
+                }
+            ]
+
+            # Apply chat template
+            text_prompt = _local_processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+
+            # Try qwen_vl_utils if available (handles image resizing etc.)
+            try:
+                from qwen_vl_utils import process_vision_info  # type: ignore
+
+                image_inputs, video_inputs = process_vision_info(messages)
+                inputs = _local_processor(
+                    text=[text_prompt],
+                    images=image_inputs,
+                    videos=video_inputs,
+                    padding=True,
+                    return_tensors="pt",
+                ).to("cuda")
+            except ImportError:
+                # Fallback: pass image directly
+                inputs = _local_processor(
+                    text=[text_prompt],
+                    images=[image],
+                    padding=True,
+                    return_tensors="pt",
+                ).to("cuda")
+
+            with torch.no_grad():
+                generated_ids = _local_model.generate(**inputs, max_new_tokens=1024)
+
+            # Decode only the newly generated tokens
+            generated_ids_trimmed = generated_ids[:, inputs["input_ids"].shape[1]:]
+            output = _local_processor.batch_decode(
+                generated_ids_trimmed,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )[0].strip()
+
+            if not output:
+                warnings.append(f"Qwen-VL local returned empty result: {image_path.name}")
+            else:
+                logger.info(f"Qwen-VL local ok: {image_path.name} → {len(output)} chars")
+
+            wrapped = f"===== OCR: {image_path.name} =====\n{output}" if output else ""
+            return wrapped, warnings
+        except Exception as exc:
+            warnings.append(f"Qwen-VL local inference failed: {image_path.name}: {exc}")
+            logger.error(f"Qwen-VL local inference error for {image_path.name}: {exc}")
+            return "", warnings
