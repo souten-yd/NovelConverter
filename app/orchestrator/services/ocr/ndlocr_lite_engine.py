@@ -96,7 +96,7 @@ def _check_model_files() -> tuple[bool, str]:
         return False, (
             f"モデルディレクトリが見つかりません: {model_dir}  "
             f"(環境変数 NDLOCR_MODEL_DIR={model_dir} に ndlocr モデルを配置してください。"
-            "起動スクリプト entrypoint.sh で自動ダウンロードを試みます)"
+            "python3 scripts/download_ndlocr_models.py でダウンロード可能です)"
         )
 
     model_files = [
@@ -107,8 +107,7 @@ def _check_model_files() -> tuple[bool, str]:
         return False, (
             f"モデルファイルが見つかりません: {model_dir} にモデルが未配置です  "
             f"(対象拡張子: {', '.join(sorted(_MODEL_EXTENSIONS))})。"
-            "entrypoint.sh が起動時に自動ダウンロードを試みます。"
-            "手動で実行する場合は scripts/download_ndlocr_models.sh を参照してください。"
+            "手動ダウンロードが必要です: python3 scripts/download_ndlocr_models.py"
         )
 
     logger.debug(f"NDLOCR-Lite: {len(model_files)} model file(s) found in {model_dir}")
@@ -191,7 +190,8 @@ class NDLOCRLiteEngine(OCREngine):
             "notes": (
                 "NDLOCR-Lite は GitHub からインストール: "
                 "pip install git+https://github.com/ndl-lab/ndlocr-lite.git  "
-                "モデルは初回起動時に NDLOCR_MODEL_DIR へ自動ダウンロードされます。"
+                "モデルは手動で NDLOCR_MODEL_DIR へ配置してください。"
+                "ダウンロード: python3 scripts/download_ndlocr_models.py"
             ),
             "status": status,
         }

@@ -121,7 +121,7 @@ class PaddleOCREngine(OCREngine):
         }
 
     @classmethod
-    def _build_init_kwargs(cls, paddle_lang: str) -> dict:
+    def _build_init_kwargs(cls, paddle_lang: str, use_angle_cls: bool = True) -> dict:
         """Build PaddleOCR constructor kwargs compatible with the installed version.
 
         PaddleOCR 2.x: accepts show_log=False
@@ -131,7 +131,7 @@ class PaddleOCREngine(OCREngine):
         """
         from paddleocr import PaddleOCR
 
-        kwargs: dict = {"use_angle_cls": True, "lang": paddle_lang}
+        kwargs: dict = {"use_angle_cls": use_angle_cls, "lang": paddle_lang}
 
         try:
             sig = inspect.signature(PaddleOCR.__init__)
@@ -202,11 +202,36 @@ class PaddleOCREngine(OCREngine):
                 )
                 raise RuntimeError(cls._init_error) from exc
         except Exception as exc:
-            cls._init_error = str(exc)
-            logger.error(
-                f"PaddleOCR initialization failed (version={version}): {exc}"
-            )
-            raise RuntimeError(cls._init_error) from exc
+            error_str = str(exc)
+            # If failure is related to doc_orientation model (PP-LCNet) or
+            # PaddlePaddle version mismatch (set_optimization_level), retry
+            # with use_angle_cls=False to bypass the problematic model.
+            # Novel OCR typically doesn't need angle classification.
+            _retry_hints = ("PP-LCNet", "doc_ori", "set_optimization_level", "inference.yml")
+            if any(hint in error_str for hint in _retry_hints):
+                logger.warning(
+                    f"PaddleOCR init failed with angle_cls (version={version}): {exc}. "
+                    "Retrying with use_angle_cls=False (novel OCR doesn't require angle classification)..."
+                )
+                kwargs_no_angle = cls._build_init_kwargs(paddle_lang, use_angle_cls=False)
+                try:
+                    cls._ocr_instance = PaddleOCR(**kwargs_no_angle)
+                    logger.info(
+                        f"PaddleOCR initialized with use_angle_cls=False (version={version})"
+                    )
+                    return
+                except Exception as exc2:
+                    cls._init_error = str(exc2)
+                    logger.error(
+                        f"PaddleOCR fallback init (no angle_cls) also failed (version={version}): {exc2}"
+                    )
+                    raise RuntimeError(cls._init_error) from exc2
+            else:
+                cls._init_error = error_str
+                logger.error(
+                    f"PaddleOCR initialization failed (version={version}): {exc}"
+                )
+                raise RuntimeError(cls._init_error) from exc
 
     def extract_text(
         self,
