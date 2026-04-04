@@ -142,6 +142,8 @@ def paddleocr_status():
         "paddlepaddle_version": paddle_version,
         "paddlex_version": paddlex_version,
         "cuda_available": cuda_available,
+        "configured_device": PaddleOCREngine._device,
+        "resolved_device": PaddleOCREngine._resolved_device,
         "instance_ready": PaddleOCREngine._ocr_instance is not None,
         "init_error": init_error,
         "runtime_ready": init_error is None,

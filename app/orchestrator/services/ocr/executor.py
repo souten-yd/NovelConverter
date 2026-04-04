@@ -49,6 +49,7 @@ def _run_paddle_ocr(
         from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
 
         engine = PaddleOCREngine()
+        PaddleOCREngine.configure(device=device, use_layout=use_layout)
         available, missing = engine.is_available()
         if not available:
             result.status = "error"
@@ -56,11 +57,10 @@ def _run_paddle_ocr(
             result.stop_timer()
             return result
 
-        text, warnings = engine.extract_text(Path(image_path), lang=f"{'jpn' if lang == 'japan' else 'eng'}+eng")
-        result.warnings.extend(warnings)
-
-        # Also get raw OCR data with bboxes
-        _populate_tokens_from_paddle(result, image_path, lang)
+        raw_items = engine.run_paddle_ocr(image_path, lang)
+        if not raw_items:
+            result.warnings.append(f"PaddleOCR returned empty result: {Path(image_path).name}")
+        _populate_tokens_from_paddle(result, raw_items)
 
         # Build plain text from tokens if available, otherwise use engine output
         if result.tokens:
@@ -71,13 +71,11 @@ def _run_paddle_ocr(
             )
             result.plain_text = "\n".join(t.text for t in sorted_tokens if t.text.strip())
         else:
-            # Strip the "===== OCR: ... =====" header if present
-            plain = text
-            if plain.startswith("===== OCR:"):
-                newline_pos = plain.find("\n")
-                if newline_pos >= 0:
-                    plain = plain[newline_pos + 1:]
-            result.plain_text = plain.strip()
+            result.plain_text = "\n".join(
+                str(item.get("text", "")).strip()
+                for item in raw_items
+                if str(item.get("text", "")).strip()
+            ).strip()
 
     except Exception as exc:
         result.status = "error"
@@ -88,32 +86,22 @@ def _run_paddle_ocr(
     return result
 
 
-def _populate_tokens_from_paddle(result: OCRPageResult, image_path: str, lang: str) -> None:
-    """Extract token-level bounding boxes from PaddleOCR raw output."""
+def _populate_tokens_from_paddle(result: OCRPageResult, raw_items: list[dict]) -> None:
+    """Extract token-level bounding boxes from PaddleOCR 3.x normalized output."""
     try:
-        from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
-
-        ocr = PaddleOCREngine._ocr_instance
-        if ocr is None:
-            return
-
-        raw = ocr.ocr(image_path, cls=True)
-        if not raw or not raw[0]:
-            return
-
-        for line_idx, line_info in enumerate(raw[0]):
-            if not line_info or len(line_info) < 2:
+        for line_idx, line_info in enumerate(raw_items):
+            text = str(line_info.get("text", "")).strip()
+            if not text:
                 continue
-            bbox_points = line_info[0]
-            text_info = line_info[1]
-            text = text_info[0] if isinstance(text_info, (list, tuple)) else str(text_info)
-            conf = text_info[1] if isinstance(text_info, (list, tuple)) and len(text_info) > 1 else 0.0
-
-            bbox = BBox.from_polygon(bbox_points)
+            conf = float(line_info.get("score", 0.0))
+            poly = line_info.get("poly")
+            if poly is None:
+                continue
+            bbox = BBox.from_polygon(poly)
             result.tokens.append(OCRToken(
                 text=text,
                 bbox=bbox,
-                confidence=float(conf),
+                confidence=conf,
                 block_order=0,
                 line_order=line_idx,
                 token_order=0,
@@ -274,6 +262,42 @@ def execute_ocr(
     futures: list[Future] = []
 
     # --- PaddleOCR (ThreadPool, GPU) ---
+    if paddle_jobs:
+        # Preflight once per job to avoid repeating the same API mismatch error
+        try:
+            from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine, _get_paddleocr_version
+
+            preflight_engine = PaddleOCREngine()
+            PaddleOCREngine.configure(device=config.paddle_device, use_layout=False)
+            available, reason = preflight_engine.is_available()
+            if available:
+                preflight_engine._init_ocr(config.paddle_lang)
+            else:
+                raise RuntimeError(reason)
+        except Exception as exc:
+            version = "unknown"
+            try:
+                from app.orchestrator.services.ocr.paddleocr_engine import _get_paddleocr_version
+
+                version = _get_paddleocr_version()
+            except Exception:
+                pass
+            preflight_error = f"PaddleOCR preflight failed: {exc} (version={version})"
+            logger.error(preflight_error)
+            for job in paddle_jobs:
+                fail = OCRPageResult(page_index=job.page_index, image_path=job.image_path)
+                fail.engine = EngineType.PADDLE_FAST.value
+                fail.status = "error"
+                fail.error_message = preflight_error
+                results.append(fail)
+                completed += 1
+                if progress_cb:
+                    try:
+                        progress_cb(completed, total)
+                    except Exception:
+                        pass
+            paddle_jobs = []
+
     if paddle_jobs:
         paddle_pool = ThreadPoolExecutor(
             max_workers=config.paddle_max_workers,

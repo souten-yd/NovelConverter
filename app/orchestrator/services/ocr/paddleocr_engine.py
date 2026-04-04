@@ -1,16 +1,9 @@
-"""PaddleOCR engine adapter.
-
-Version compatibility notes:
-  - PaddleOCR 2.x: PaddleOCR(show_log=False, ...) is accepted
-  - PaddleOCR 3.x: show_log was removed; suppress logging via Python's logging module
-  This adapter detects the installed version and builds kwargs accordingly.
-"""
+"""PaddleOCR 3.x engine adapter."""
 from __future__ import annotations
 
-import inspect
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from app.orchestrator.services.ocr.base import OCREngine
 from app.shared.logger import get_logger
@@ -45,6 +38,7 @@ class PaddleOCREngine(OCREngine):
 
     # GPU / device configuration (used by the enhanced pipeline)
     _device: str = "gpu:0"
+    _resolved_device: str = "gpu:0"
     _use_layout: bool = False
 
     @classmethod
@@ -64,18 +58,14 @@ class PaddleOCREngine(OCREngine):
                 logger.info(f"PaddleOCR config changed: device={device} layout={use_layout}")
 
     @classmethod
-    def get_raw_ocr_result(cls, image_path: str, lang: str = "japan") -> list:
-        """Return raw PaddleOCR result with bounding boxes and confidence.
-
-        Used by the enhanced pipeline for token-level extraction.
-        Returns the raw result list from paddleocr.ocr().
-        """
-        paddle_lang = "japan" if "jpn" in lang or lang == "japan" else "en"
-        cls._init_ocr(paddle_lang)
+    def run_paddle_ocr(cls, image_path: str, lang: str = "japan") -> list[dict[str, Any]]:
+        """PaddleOCR 3.x 対応の単一呼び出し口."""
+        cls._init_ocr(lang)
         if cls._ocr_instance is None:
             return []
-        result = cls._ocr_instance.ocr(str(image_path), cls=True)
-        return result if result else []
+        result = cls._ocr_instance.predict(str(image_path))
+        normalized = cls._normalize_predict_result(result)
+        return normalized
 
     def is_available(self) -> tuple[bool, str]:
         missing = []
@@ -120,42 +110,34 @@ class PaddleOCREngine(OCREngine):
             "system_packages": [],
         }
 
-    @classmethod
-    def _build_init_kwargs(cls, paddle_lang: str, use_angle_cls: bool = True) -> dict:
-        """Build PaddleOCR constructor kwargs compatible with the installed version.
-
-        PaddleOCR 2.x: accepts show_log=False
-        PaddleOCR 3.x: show_log removed; logging is suppressed via logging module
-        We use inspect to detect which parameters are accepted so the code works
-        with both versions without hard-coding a version number.
-        """
-        from paddleocr import PaddleOCR
-
-        kwargs: dict = {"use_angle_cls": use_angle_cls, "lang": paddle_lang}
-
+    @staticmethod
+    def _paddleocr_major_version() -> int:
+        version = _get_paddleocr_version()
         try:
-            sig = inspect.signature(PaddleOCR.__init__)
-            if "show_log" in sig.parameters:
-                kwargs["show_log"] = False
-            else:
-                logger.debug(
-                    "PaddleOCR.__init__ does not accept show_log "
-                    "(likely v3.x) – suppressing logging via logging module"
-                )
-        except Exception as exc:
-            logger.debug(f"Could not inspect PaddleOCR.__init__ signature: {exc}")
-            # Omit show_log safely; we suppress via logging module anyway
+            return int(str(version).split(".")[0])
+        except Exception:
+            return 0
 
+    @classmethod
+    def _build_init_kwargs(cls, paddle_lang: str) -> dict:
+        """Build PaddleOCR constructor kwargs for 3.x."""
+        kwargs: dict[str, Any] = {
+            "lang": paddle_lang,
+            "device": cls._resolved_device,
+        }
+        # 3.x の正式設定キーのみを利用（未対応環境でも安全に無視されるよう最小限）
+        if cls._use_layout:
+            kwargs["use_doc_orientation_classify"] = True
+            kwargs["use_doc_unwarping"] = True
+            kwargs["use_textline_orientation"] = True
         return kwargs
 
     @classmethod
     def _init_ocr(cls, paddle_lang: str) -> None:
         """Initialize singleton PaddleOCR instance.
 
-        - Suppresses ppocr/paddle logging via Python logging module
-        - Uses inspect to pass show_log=False only when the parameter exists
-        - Caches any initialization error in _init_error so that subsequent
-          calls fail immediately instead of retrying (and spamming the log)
+        - PaddleOCR 3.x のみを許可
+        - Caches initialization error in _init_error so calls fail fast
         """
         if cls._ocr_instance is not None:
             return
@@ -167,6 +149,15 @@ class PaddleOCREngine(OCREngine):
         _suppress_paddle_logs()
 
         version = _get_paddleocr_version()
+        major = cls._paddleocr_major_version()
+        if major != 3:
+            cls._init_error = (
+                f"Unsupported PaddleOCR major version: {version}. "
+                "This service requires PaddleOCR 3.x."
+            )
+            raise RuntimeError(cls._init_error)
+
+        cls._resolved_device = cls._resolve_device(cls._device)
         logger.info(f"Initializing PaddleOCR (version={version}, lang={paddle_lang})")
 
         kwargs = cls._build_init_kwargs(paddle_lang)
@@ -174,64 +165,69 @@ class PaddleOCREngine(OCREngine):
         try:
             cls._ocr_instance = PaddleOCR(**kwargs)
             logger.info(f"PaddleOCR initialized successfully (version={version})")
-        except TypeError as exc:
-            # Safety net: if show_log still slipped through (e.g. via **kwargs
-            # forwarding in some PaddleOCR version), retry without it.
-            if "show_log" in str(exc):
-                logger.warning(
-                    f"PaddleOCR rejected show_log argument (version={version}): {exc}. "
-                    "Retrying without show_log."
-                )
-                kwargs.pop("show_log", None)
-                try:
-                    cls._ocr_instance = PaddleOCR(**kwargs)
-                    logger.info(
-                        f"PaddleOCR initialized after removing show_log (version={version})"
-                    )
-                    return
-                except Exception as exc2:
-                    cls._init_error = str(exc2)
-                    logger.error(
-                        f"PaddleOCR initialization failed (version={version}): {exc2}"
-                    )
-                    raise RuntimeError(cls._init_error) from exc2
-            else:
-                cls._init_error = str(exc)
-                logger.error(
-                    f"PaddleOCR initialization failed (version={version}): {exc}"
-                )
-                raise RuntimeError(cls._init_error) from exc
         except Exception as exc:
-            error_str = str(exc)
-            # If failure is related to doc_orientation model (PP-LCNet) or
-            # PaddlePaddle version mismatch (set_optimization_level), retry
-            # with use_angle_cls=False to bypass the problematic model.
-            # Novel OCR typically doesn't need angle classification.
-            _retry_hints = ("PP-LCNet", "doc_ori", "set_optimization_level", "inference.yml")
-            if any(hint in error_str for hint in _retry_hints):
+            cls._init_error = str(exc)
+            logger.error(
+                f"PaddleOCR initialization failed (version={version}): {exc}"
+            )
+            raise RuntimeError(cls._init_error) from exc
+
+    @staticmethod
+    def _resolve_device(requested_device: str) -> str:
+        """Resolve requested device to an actually usable Paddle device string."""
+        req = (requested_device or "").strip().lower()
+        if not req:
+            req = "cpu"
+        if req.startswith("cpu"):
+            return "cpu"
+
+        # GPU requested: use only when Paddle is CUDA-enabled.
+        try:
+            import paddle
+
+            cuda_ok = getattr(paddle, "is_compiled_with_cuda", lambda: False)()
+            if not cuda_ok:
                 logger.warning(
-                    f"PaddleOCR init failed with angle_cls (version={version}): {exc}. "
-                    "Retrying with use_angle_cls=False (novel OCR doesn't require angle classification)..."
+                    "PaddleOCR requested GPU device but PaddlePaddle is CPU build. "
+                    "Falling back to cpu."
                 )
-                kwargs_no_angle = cls._build_init_kwargs(paddle_lang, use_angle_cls=False)
-                try:
-                    cls._ocr_instance = PaddleOCR(**kwargs_no_angle)
-                    logger.info(
-                        f"PaddleOCR initialized with use_angle_cls=False (version={version})"
-                    )
-                    return
-                except Exception as exc2:
-                    cls._init_error = str(exc2)
-                    logger.error(
-                        f"PaddleOCR fallback init (no angle_cls) also failed (version={version}): {exc2}"
-                    )
-                    raise RuntimeError(cls._init_error) from exc2
-            else:
-                cls._init_error = error_str
-                logger.error(
-                    f"PaddleOCR initialization failed (version={version}): {exc}"
-                )
-                raise RuntimeError(cls._init_error) from exc
+                return "cpu"
+            return requested_device
+        except Exception as exc:
+            logger.warning(
+                f"Could not verify CUDA capability for requested device '{requested_device}': {exc}. "
+                "Falling back to cpu."
+            )
+            return "cpu"
+
+    @staticmethod
+    def _normalize_predict_result(result: Any) -> list[dict[str, Any]]:
+        """Normalize PaddleOCR 3.x predict() output."""
+        if not result:
+            return []
+        if not isinstance(result, list):
+            result = [result]
+
+        normalized: list[dict[str, Any]] = []
+        for item in result:
+            if hasattr(item, "res"):
+                item = item.res
+            if not isinstance(item, dict):
+                continue
+
+            texts = item.get("rec_texts") or []
+            scores = item.get("rec_scores") or []
+            polys = item.get("rec_polys") or item.get("dt_polys") or []
+            for idx, text in enumerate(texts):
+                poly = polys[idx] if idx < len(polys) else None
+                score = scores[idx] if idx < len(scores) else 0.0
+                normalized.append({
+                    "text": str(text),
+                    "score": float(score) if score is not None else 0.0,
+                    "poly": poly,
+                })
+
+        return normalized
 
     def extract_text(
         self,
@@ -259,21 +255,16 @@ class PaddleOCREngine(OCREngine):
 
         try:
             self._init_ocr(paddle_lang)
-            ocr = PaddleOCREngine._ocr_instance
 
-            result = ocr.ocr(str(image_path), cls=True)
-            if not result or not result[0]:
+            result = self.run_paddle_ocr(str(image_path), paddle_lang)
+            if not result:
                 warnings.append(f"PaddleOCR returned empty result: {image_path.name}")
                 return "", warnings
 
             lines = []
-            for line_info in result[0]:
-                if line_info and len(line_info) >= 2:
-                    text = (
-                        line_info[1][0]
-                        if isinstance(line_info[1], (list, tuple))
-                        else str(line_info[1])
-                    )
+            for line_info in result:
+                text = str(line_info.get("text", "")).strip()
+                if text:
                     lines.append(text)
 
             combined = "\n".join(lines).strip()
