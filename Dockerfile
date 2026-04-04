@@ -50,7 +50,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     # HuggingFace cache → /workspace for RunPod persistence
     HF_HOME=/workspace/hf_cache \
     TRANSFORMERS_CACHE=/workspace/hf_cache \
-    LD_LIBRARY_PATH=/opt/llama-cpp/lib:${LD_LIBRARY_PATH}
+    LD_LIBRARY_PATH=/opt/llama-cpp/lib:${LD_LIBRARY_PATH} \
+    # NDLOCR-Lite model directory (persistent RunPod storage)
+    NDLOCR_MODEL_DIR=/workspace/ndlocr_models
 
 # ── System packages ───────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -137,9 +139,19 @@ COPY requirements_docker.txt .
 RUN pip install --no-cache-dir -r requirements_docker.txt
 
 # ── NDLOCR-Lite (NDL Japanese OCR – installed from GitHub) ───────────────────
+# The pip package installs the CLI binary; model weights are NOT bundled.
+# Models are downloaded at container startup by entrypoint.sh and stored in
+# NDLOCR_MODEL_DIR (/workspace/ndlocr_models) which is a RunPod persistent
+# volume – so they survive Pod restarts without re-downloading.
 RUN pip install --no-cache-dir \
       git+https://github.com/ndl-lab/ndlocr_cli.git \
+    && echo "[Dockerfile] NDLOCR-Lite CLI installed" \
     || echo "WARNING: NDLOCR-Lite install failed – engine will report unavailable at runtime"
+
+# Create placeholder model dir at image build time.
+# The actual model files are downloaded to /workspace/ndlocr_models at runtime
+# (entrypoint.sh) because /workspace is a RunPod-mounted persistent volume.
+RUN mkdir -p /workspace/ndlocr_models
 
 # ── Application code ──────────────────────────────────────────────────────────
 COPY app/        ${APP_DIR}/app/
@@ -164,6 +176,7 @@ RUN mkdir -p \
     /workspace/data/temp \
     /workspace/data/references \
     /workspace/hf_cache \
+    /workspace/ndlocr_models \
     /var/log/novelconverter
 
 # ── Health check (orchestrator) ───────────────────────────────────────────────
