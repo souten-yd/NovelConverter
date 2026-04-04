@@ -74,6 +74,18 @@
     </div>
   </div>
 
+  <!-- Step 1.5: OCR Viewer -->
+  <div class="step-card">
+    <div class="step-num">1.5</div>
+    <div class="step-body">
+      <h3>OCR結果ビューア</h3>
+      <p class="text-muted">OCR結果の確認・ルビ平行表示・デバッグ表示</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <a href="/projects/{{ project.id }}/ocr_viewer" class="btn btn-outline" {{ 'disabled' if not project.raw_text_path }}>OCR Viewer を開く</a>
+      </div>
+    </div>
+  </div>
+
   <!-- Step 2: Preprocess -->
   <div class="step-card {{ 'step-done' if project.status in ['preprocessed','segmented','rendering','done'] else '' }}">
     <div class="step-num">2</div>

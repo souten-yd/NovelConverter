@@ -17,12 +17,25 @@ _engines: dict[str, OCREngine] = {
     "ndlocr_lite": NDLOCRLiteEngine(),
 }
 
+# Engine aliases: the enhanced pipeline uses these names
+_ENGINE_ALIASES: dict[str, str] = {
+    "paddle_fast": "paddleocr",
+    "paddle_layout": "paddleocr",
+    "fallback": "tesseract",
+}
+
 DEFAULT_ENGINE = "tesseract"
 
 
 def get_engine(engine_id: str) -> OCREngine:
-    """Get an OCR engine by ID. Falls back to tesseract if not found."""
-    engine = _engines.get(engine_id)
+    """Get an OCR engine by ID. Falls back to tesseract if not found.
+
+    Also resolves enhanced-pipeline aliases:
+      paddle_fast / paddle_layout → paddleocr
+      fallback → tesseract
+    """
+    resolved = _ENGINE_ALIASES.get(engine_id, engine_id)
+    engine = _engines.get(resolved)
     if engine is None:
         engine = _engines[DEFAULT_ENGINE]
     return engine

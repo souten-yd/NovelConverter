@@ -1,0 +1,358 @@
+{% extends "base.html" %}
+{% block title %}OCR Viewer – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="breadcrumb">
+  <a href="/">ホーム</a> / <a href="/projects/{{ project.id }}">{{ project.name }}</a> / OCR Viewer
+</div>
+
+<div class="page-header">
+  <h1>OCR Viewer</h1>
+  <span class="badge badge-{{ project.status }}">{{ project.status }}</span>
+</div>
+
+<!-- Controls -->
+<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0">
+  <div>
+    <label style="font-size:0.85em;font-weight:600;display:block;margin-bottom:2px">表示モード:</label>
+    <select id="displayMode" class="input" style="min-width:180px" onchange="onModeChange()">
+      <option value="text_only">本��のみ</option>
+      <option value="ruby_parallel" selected>ルビ平行表示</option>
+      <option value="debug_overlay">デバッグ表示</option>
+    </select>
+  </div>
+  <div>
+    <label style="font-size:0.85em;font-weight:600;display:block;margin-bottom:2px">フィルタ:</label>
+    <select id="filterMode" class="input" style="min-width:160px" onchange="loadPages()">
+      <option value="all">全ページ</option>
+      <option value="ruby_only">ルビ検出ページのみ</option>
+    </select>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:8px">
+    <button class="btn btn-primary" onclick="runPipeline()">OCRパイプライン実行</button>
+    <button class="btn btn-outline" onclick="loadPages()">更新</button>
+  </div>
+</div>
+
+<!-- Pipeline config (collapsible) -->
+<details style="margin-bottom:16px">
+  <summary style="cursor:pointer;font-weight:600;font-size:0.9em;color:#4f6ef7">パイプライン設定</summary>
+  <div style="padding:12px;background:#f1f5f9;border-radius:0 0 8px 8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:4px">
+    <div>
+      <label class="config-label">デフォルトエンジン</label>
+      <select id="cfgEngine" class="input">
+        <option value="ndlocr_lite">NDLOCR-Lite</option>
+        <option value="paddle_fast">PaddleOCR (高速)</option>
+        <option value="paddle_layout">PaddleOCR (レイアウト)</option>
+      </select>
+    </div>
+    <div>
+      <label class="config-label">PaddleOCR デバイス</label>
+      <input id="cfgDevice" class="input" value="gpu:0">
+    </div>
+    <div>
+      <label class="config-label">PaddleOCR ワーカー数</label>
+      <input id="cfgPaddleWorkers" class="input" type="number" value="2" min="1" max="8">
+    </div>
+    <div>
+      <label class="config-label">NDLOCR ワーカー数</label>
+      <input id="cfgNdlocrWorkers" class="input" type="number" value="4" min="1" max="16">
+    </div>
+    <div>
+      <label class="config-label">ルビ検出</label>
+      <select id="cfgRuby" class="input">
+        <option value="true">有効</option>
+        <option value="false">無効</option>
+      </select>
+    </div>
+    <div>
+      <label class="config-label">キャッシュ</label>
+      <select id="cfgCache" class="input">
+        <option value="true">有効</option>
+        <option value="false">無効</option>
+      </select>
+    </div>
+  </div>
+</details>
+
+<!-- Progress bar (hidden initially) -->
+<div id="pipelineProgress" style="display:none;margin-bottom:16px;padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+    <span id="pipelineStage" style="font-size:0.9em;font-weight:600">初期化中...</span>
+    <span id="pipelinePct" style="font-size:0.85em;color:#64748b">0%</span>
+  </div>
+  <div style="background:#e2e8f0;border-radius:4px;height:8px;overflow:hidden">
+    <div id="pipelineBar" style="width:0%;height:100%;background:#4f6ef7;transition:width .3s;border-radius:4px"></div>
+  </div>
+  <div id="pipelineInfo" style="font-size:0.8em;color:#64748b;margin-top:4px"></div>
+</div>
+
+<!-- Page summary -->
+<div id="pageSummary" style="margin-bottom:12px;font-size:0.85em;color:#475569"></div>
+
+<!-- Page list with navigation -->
+<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap" id="pageNav"></div>
+
+<!-- Main content area -->
+<div id="pageContent" style="min-height:400px">
+  <div style="text-align:center;color:#94a3b8;padding:60px">
+    OCRパイプラインを実行すると結果がここに表示されます
+  </div>
+</div>
+
+<style>
+  .config-label { font-size:0.78em;font-weight:600;display:block;margin-bottom:2px;color:#475569 }
+  .page-btn { padding:4px 10px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;font-size:0.82em;transition:all .15s }
+  .page-btn:hover { background:#f1f5f9;border-color:#94a3b8 }
+  .page-btn.active { background:#4f6ef7;color:#fff;border-color:#4f6ef7 }
+  .page-btn.has-ruby { border-color:#f59e0b;background:#fffbeb }
+  .page-btn.has-ruby.active { background:#f59e0b;border-color:#f59e0b;color:#fff }
+  .page-btn.error { border-color:#ef4444;background:#fef2f2;color:#dc2626 }
+
+  .parallel-view { display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:8px }
+  .pane { padding:16px;border-radius:8px;border:1px solid #e2e8f0;background:#fff;min-height:200px }
+  .pane-header { font-size:0.82em;font-weight:700;color:#64748b;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #f1f5f9 }
+  .pane-text { font-size:0.92em;line-height:1.8;white-space:pre-wrap;word-break:break-all }
+
+  .page-meta { display:flex;gap:16px;flex-wrap:wrap;padding:10px 14px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;margin-bottom:12px;font-size:0.82em;color:#475569 }
+  .meta-item { display:flex;gap:4px;align-items:center }
+  .meta-label { font-weight:600;color:#64748b }
+  .ruby-badge { display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:10px;font-size:0.78em;font-weight:600 }
+  .ruby-detected { background:#fef3c7;color:#92400e }
+  .ruby-possible { background:#e0f2fe;color:#0369a1 }
+  .ruby-none { background:#f1f5f9;color:#94a3b8 }
+
+  .debug-view { position:relative;overflow:auto;max-height:600px }
+  .debug-view img { max-width:100%;display:block }
+  .debug-box { position:absolute;border:2px solid rgba(79,110,247,0.6);background:rgba(79,110,247,0.05) }
+  .debug-ruby-box { position:absolute;border:2px solid rgba(245,158,11,0.7);background:rgba(245,158,11,0.08) }
+  .debug-order { position:absolute;font-size:10px;background:#4f6ef7;color:#fff;padding:1px 4px;border-radius:3px;line-height:1.2 }
+
+  @media (max-width: 768px) {
+    .parallel-view { grid-template-columns:1fr }
+  }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const projectId = '{{ project.id }}';
+let allPages = [];
+let currentPageIndex = -1;
+
+// Load pages on init
+loadPages();
+
+async function loadPages() {
+  const filter = document.getElementById('filterMode').value;
+  const params = filter === 'ruby_only' ? '?ruby_only=true' : '';
+  try {
+    const res = await fetch(`/api/projects/${projectId}/ocr/pages${params}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    allPages = data.pages || [];
+    renderPageNav();
+    renderSummary(data);
+    if (allPages.length > 0 && currentPageIndex < 0) {
+      selectPage(allPages[0].page_index);
+    } else if (currentPageIndex >= 0) {
+      selectPage(currentPageIndex);
+    }
+  } catch(e) { console.warn('loadPages', e); }
+}
+
+function renderSummary(data) {
+  const el = document.getElementById('pageSummary');
+  const rubyCount = allPages.filter(p => p.ruby_detected).length;
+  const errorCount = allPages.filter(p => p.status === 'error').length;
+  el.innerHTML = `合計 <b>${data.total_pages}</b> ページ` +
+    (rubyCount > 0 ? ` | ルビ検出: <b style="color:#92400e">${rubyCount}</b>` : '') +
+    (errorCount > 0 ? ` | エラー: <b style="color:#dc2626">${errorCount}</b>` : '');
+}
+
+function renderPageNav() {
+  const nav = document.getElementById('pageNav');
+  nav.innerHTML = '';
+  allPages.forEach(p => {
+    const btn = document.createElement('button');
+    btn.className = 'page-btn' +
+      (p.page_index === currentPageIndex ? ' active' : '') +
+      (p.ruby_detected ? ' has-ruby' : '') +
+      (p.status === 'error' ? ' error' : '');
+    btn.textContent = p.page_index + 1;
+    btn.title = `Page ${p.page_index + 1} | ${p.ocr_engine} | Ruby: ${p.ruby_mode}`;
+    btn.onclick = () => selectPage(p.page_index);
+    nav.appendChild(btn);
+  });
+}
+
+async function selectPage(pageIndex) {
+  currentPageIndex = pageIndex;
+  renderPageNav();
+
+  try {
+    const res = await fetch(`/api/projects/${projectId}/ocr/pages/${pageIndex}`);
+    if (!res.ok) { document.getElementById('pageContent').innerHTML = '<div style="color:#dc2626">ページ読み込み失敗</div>'; return; }
+    const page = await res.json();
+    renderPage(page);
+  } catch(e) {
+    document.getElementById('pageContent').innerHTML = '<div style="color:#dc2626">エラー: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+function renderPage(page) {
+  const mode = document.getElementById('displayMode').value;
+  const container = document.getElementById('pageContent');
+
+  // Page metadata header
+  const rubyClass = page.ruby_detected ? (page.ruby_mode === 'detected' ? 'ruby-detected' : 'ruby-possible') : 'ruby-none';
+  const rubyLabel = page.ruby_detected ? (page.ruby_mode === 'detected' ? '検出' : '候補あり') : 'なし';
+  const elapsedSec = (page.elapsed_ms / 1000).toFixed(2);
+
+  let meta = `<div class="page-meta">
+    <div class="meta-item"><span class="meta-label">Page</span> ${page.page_index + 1}</div>
+    <div class="meta-item"><span class="meta-label">Engine:</span> ${escHtml(page.ocr_engine)}</div>
+    <div class="meta-item"><span class="meta-label">Time:</span> ${elapsedSec}s</div>
+    <div class="meta-item"><span class="ruby-badge ${rubyClass}">Ruby: ${rubyLabel} (${(page.ruby_confidence * 100).toFixed(0)}%)</span></div>
+    <div class="meta-item"><span class="meta-label">候補:</span> ${page.ruby_candidates_count}</div>
+    <div class="meta-item"><span class="meta-label">文字数:</span> ${page.char_count}</div>
+    <div class="meta-item"><span class="meta-label">複雑度:</span> ${(page.layout_complexity * 100).toFixed(0)}%</div>
+  </div>`;
+
+  if (page.status === 'error') {
+    container.innerHTML = meta + `<div style="padding:20px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#991b1b">
+      <b>エラー:</b> ${escHtml(page.error_message || '不明なエラー')}
+    </div>`;
+    return;
+  }
+
+  if (mode === 'text_only') {
+    container.innerHTML = meta + `<div class="pane"><div class="pane-header">本文 (プレーンテキスト)</div>
+      <div class="pane-text">${escHtml(page.plain_text || '(テキストなし)')}</div></div>`;
+  } else if (mode === 'ruby_parallel') {
+    container.innerHTML = meta + `<div class="parallel-view">
+      <div class="pane">
+        <div class="pane-header">本文のみ</div>
+        <div class="pane-text">${escHtml(page.plain_text || '(テキストなし)')}</div>
+      </div>
+      <div class="pane">
+        <div class="pane-header">ルビ付き表示</div>
+        <div class="pane-text" style="line-height:2.2">${page.ruby_html || escHtml(page.plain_text || '(テキストなし)')}</div>
+      </div>
+    </div>`;
+    // Also show structured data if available
+    if (page.ruby_attachments && page.ruby_attachments.length > 0) {
+      const attachHtml = page.ruby_attachments.map(a =>
+        `<tr><td>${escHtml(a.base)}</td><td>${escHtml(a.ruby)}</td><td>${(a.confidence * 100).toFixed(0)}%</td></tr>`
+      ).join('');
+      container.innerHTML += `<div style="margin-top:16px"><details>
+        <summary style="cursor:pointer;font-weight:600;font-size:0.85em;color:#4f6ef7">ルビ紐付け一覧 (${page.ruby_attachments.length}件)</summary>
+        <table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:0.85em">
+          <thead><tr style="background:#f1f5f9"><th style="padding:6px;text-align:left">本文</th><th style="padding:6px;text-align:left">ルビ</th><th style="padding:6px;text-align:left">信頼度</th></tr></thead>
+          <tbody>${attachHtml}</tbody>
+        </table>
+      </details></div>`;
+    }
+  } else if (mode === 'debug_overlay') {
+    let debugHtml = meta;
+    debugHtml += `<div class="pane"><div class="pane-header">デバッグ情報</div>`;
+    if (page.structured_lines && page.structured_lines.length > 0) {
+      debugHtml += `<div style="font-size:0.82em;margin-bottom:8px"><b>構造化行数:</b> ${page.structured_lines.length}</div>`;
+      page.structured_lines.forEach((ln, i) => {
+        const segs = (ln.segments || []).map(s => {
+          if (s.type === 'ruby') return `<span style="color:#f59e0b;font-size:0.8em">[${escHtml(s.text)}]</span>`;
+          return escHtml(s.text);
+        }).join('');
+        debugHtml += `<div style="font-size:0.85em;padding:2px 0;border-bottom:1px solid #f1f5f9">
+          <span style="color:#94a3b8;font-size:0.75em">${escHtml(ln.line_id)} ${ln.orientation}</span> ${segs}
+        </div>`;
+      });
+    }
+    // Show JSON structure
+    debugHtml += `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:0.82em;font-weight:600;color:#4f6ef7">Raw JSON</summary>
+      <pre style="font-size:0.75em;background:#f8fafc;padding:12px;border-radius:6px;overflow:auto;max-height:400px">${escHtml(JSON.stringify(page, null, 2))}</pre>
+    </details>`;
+    debugHtml += `</div>`;
+    container.innerHTML = debugHtml;
+  }
+}
+
+function onModeChange() {
+  if (currentPageIndex >= 0) selectPage(currentPageIndex);
+}
+
+// Pipeline execution
+async function runPipeline() {
+  const progressEl = document.getElementById('pipelineProgress');
+  progressEl.style.display = 'block';
+  _setPipelineStage('初期化中...', 0);
+
+  const config = {
+    default_engine: document.getElementById('cfgEngine').value,
+    paddle_device: document.getElementById('cfgDevice').value,
+    paddle_max_workers: parseInt(document.getElementById('cfgPaddleWorkers').value) || 2,
+    ndlocr_max_workers: parseInt(document.getElementById('cfgNdlocrWorkers').value) || 4,
+    enable_ruby_detection: document.getElementById('cfgRuby').value === 'true',
+    enable_cache: document.getElementById('cfgCache').value === 'true',
+    paddle_use_layout: true,
+    paddle_lang: 'japan',
+    ruby_confidence_threshold: 0.5,
+  };
+
+  try {
+    const res = await fetch(`/api/projects/${projectId}/ocr/run_pipeline`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config, force: false }),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      _setPipelineStage('失敗: ' + (e.detail || '不明なエラー'), 0, true);
+      return;
+    }
+    const data = await res.json();
+    _pollPipelineJob(data.job_id);
+  } catch(e) {
+    _setPipelineStage('エラー: ' + e.message, 0, true);
+  }
+}
+
+function _pollPipelineJob(jobId) {
+  const interval = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/jobs/${jobId}`);
+      if (!res.ok) { clearInterval(interval); return; }
+      const job = await res.json();
+      if (job.status === 'running') {
+        let label = job.stage_label || job.stage || '処理中';
+        if (job.current_count && job.total_count) label += ` (${job.current_count}/${job.total_count})`;
+        _setPipelineStage(label, job.progress_pct || 0);
+      } else if (job.status === 'completed') {
+        clearInterval(interval);
+        const rd = job.result_data || {};
+        _setPipelineStage(`完了: ${rd.total_pages || '?'}ページ (${rd.elapsed_seconds || '?'}秒)`, 100);
+        setTimeout(() => {
+          document.getElementById('pipelineProgress').style.display = 'none';
+          loadPages();
+        }, 1500);
+      } else if (job.status === 'failed') {
+        clearInterval(interval);
+        _setPipelineStage('失敗: ' + (job.error_message || '不明'), 0, true);
+      }
+    } catch(e) { console.warn('[pollPipeline]', e); }
+  }, 1500);
+}
+
+function _setPipelineStage(label, pct, isError) {
+  const stageEl = document.getElementById('pipelineStage');
+  const pctEl = document.getElementById('pipelinePct');
+  const bar = document.getElementById('pipelineBar');
+  if (stageEl) { stageEl.textContent = label; stageEl.style.color = isError ? '#c53030' : ''; }
+  if (pctEl) pctEl.textContent = pct + '%';
+  if (bar) { bar.style.width = pct + '%'; bar.style.background = isError ? '#ef4444' : '#4f6ef7'; }
+}
+
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}
