@@ -401,6 +401,8 @@ def get_diarization_rules(project_id: str):
 class PreviewDiarizationRequest(BaseModel):
     rules: List[RuleSpecIn]
     llm_fallback_mode: str = "on_error"  # disabled | on_error | always
+    use_enhanced_pipeline: bool = False   # True → segment_speakers_enhanced()
+    consistency_pass_threshold: float = 0.65
 
 
 @router.post("/{project_id}/preview_diarization")
@@ -436,7 +438,18 @@ def preview_diarization(
         llm_fallback_mode=body.llm_fallback_mode,
     )
 
-    annotated, llm_errors = segment_speakers(raw_segments, config=config)
+    if body.use_enhanced_pipeline:
+        from app.orchestrator.services.character_builder import load_character_dict
+        char_dict = load_character_dict(project_id, db)
+        annotated, llm_errors = segment_speakers_enhanced(
+            raw_segments,
+            config=config,
+            char_dict=char_dict,
+            project_id=project_id,
+            db=db,
+        )
+    else:
+        annotated, llm_errors = segment_speakers(raw_segments, config=config)
 
     segments_out = [
         {
@@ -448,6 +461,8 @@ def preview_diarization(
             "confidence": round(a.confidence, 3),
             "reason": a.reason,
             "is_chapter_header": a.is_chapter_header,
+            "needs_review": getattr(a, "needs_review", False),
+            "candidates": getattr(a, "candidates", []),
         }
         for a in annotated
     ]

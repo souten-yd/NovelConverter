@@ -31,6 +31,19 @@
 
       <div id="ruleList"></div>
 
+      <!-- Enhanced pipeline toggle -->
+      <div style="margin-top:12px;padding:10px;background:#f0fdf4;border-radius:6px;border:1px solid #86efac">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <input type="checkbox" id="useEnhancedPipeline" style="width:16px;height:16px;accent-color:#16a34a">
+          <label for="useEnhancedPipeline" style="font-size:0.83em;font-weight:600;cursor:pointer;color:#15803d">
+            高精度パイプライン (v2) を使用
+          </label>
+        </div>
+        <p class="text-muted" style="font-size:0.75em;margin:0 0 0 24px">
+          キャラクター辞書構築・候補絞り込み・整合性チェックを有効にします（低速・高精度）
+        </p>
+      </div>
+
       <!-- LLM Fallback mode selector -->
       <div style="margin-top:12px;padding:10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0">
         <label style="font-size:0.83em;font-weight:600;display:block;margin-bottom:6px">LLM フォールバックモード</label>
@@ -252,6 +265,11 @@ function getLlmFallbackMode() {
   return sel ? sel.value : 'on_error';
 }
 
+function getUseEnhancedPipeline() {
+  const chk = document.getElementById('useEnhancedPipeline');
+  return chk ? chk.checked : false;
+}
+
 function renderLlmErrors(errors) {
   const panel = document.getElementById('llmErrorPanel');
   const countEl = document.getElementById('llmErrorCount');
@@ -384,12 +402,13 @@ async function runPreview() {
 
   const rules = getRuleStates();
   const llm_fallback_mode = getLlmFallbackMode();
+  const use_enhanced_pipeline = getUseEnhancedPipeline();
 
   try {
     const r = await fetch(`/api/projects/${projectId}/preview_diarization`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rules, llm_fallback_mode }),
+      body: JSON.stringify({ rules, llm_fallback_mode, use_enhanced_pipeline }),
     });
     if (!r.ok) {
       let errDetail = '';
@@ -446,7 +465,8 @@ function renderPreview(data) {
     const color = getSpeakerColor(seg.predicted_speaker);
     const confPct = Math.round(seg.confidence * 100);
     const confColor = seg.confidence >= 0.8 ? '#48bb78' : seg.confidence >= 0.5 ? '#ed8936' : '#e53e3e';
-    const typeTag = { dialogue: '台詞', thought: '心内', narration: '地の文', unknown: '不明' }[seg.segment_type] || seg.segment_type;
+    const typeTag = { dialogue: '台詞', thought: '心内', narration: '地の文', monologue: '独白', unknown: '不明' }[seg.segment_type] || seg.segment_type;
+    const reviewBadge = seg.needs_review ? '<span style="font-size:0.7em;background:#f59e0b;color:#fff;border-radius:3px;padding:1px 4px;margin-left:4px">要確認</span>' : '';
     return `<div class="seg-row" data-speaker="${seg.predicted_speaker}" data-conf="${seg.confidence}">
       <div>
         <div class="seg-badge" style="background:${color}">${seg.predicted_speaker}</div>
@@ -455,7 +475,7 @@ function renderPreview(data) {
           <div class="conf-bar" style="width:${confPct}%;background:${confColor}"></div>
         </div>
       </div>
-      <span class="seg-text">${escHtml(seg.raw_text)}</span>
+      <span class="seg-text">${escHtml(seg.raw_text)}${reviewBadge}</span>
       <span class="seg-meta">${confPct}%<br><span style="font-size:0.85em;color:#cbd5e0">#${seg.order_index}</span></span>
     </div>`;
   }).join('');
@@ -497,6 +517,7 @@ async function saveResults() {
 
   const rules = getRuleStates();
   const llm_fallback_mode = getLlmFallbackMode();
+  const use_enhanced_pipeline = getUseEnhancedPipeline();
   const status = document.getElementById('previewStatus');
   status.textContent = '保存中...';
   document.getElementById('btnSave').disabled = true;
@@ -505,7 +526,7 @@ async function saveResults() {
     const r = await fetch(`/api/projects/${projectId}/segment_speakers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rules, llm_fallback_mode }),
+      body: JSON.stringify({ rules, llm_fallback_mode, use_enhanced_pipeline }),
     });
     const d = await r.json().catch(() => ({}));
     if (r.ok) {
