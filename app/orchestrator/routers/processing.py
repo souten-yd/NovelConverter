@@ -416,60 +416,9 @@ class PreviewDiarizationRequest(BaseModel):
     consistency_pass_threshold: float = 0.65
 
 
-@router.post("/{project_id}/preview_diarization")
-def preview_diarization(
-    project_id: str,
-    body: PreviewDiarizationRequest,
-    db: Session = Depends(get_db),
-):
-    """Run diarization with a custom rule config and return results WITHOUT saving to DB."""
-    _get_project_or_404(project_id, db)
-
-    db_segs = (
-        db.query(Segment)
-        .filter(Segment.project_id == project_id)
-        .order_by(Segment.order_index)
-        .all()
-    )
-    if not db_segs:
-        raise HTTPException(status_code=400, detail="Run preprocess first")
-
-    from app.orchestrator.services.preprocessor import RawSegment
-    raw_segments = [
-        RawSegment(
-            chapter_index=s.chapter_index,
-            order_index=s.order_index,
-            text=s.normalized_text,
-        )
-        for s in db_segs
-    ]
-
-    config = DiarizationConfig(
-        rules=[RuleSpec(rule_id=r.rule_id, enabled=r.enabled, params=r.params) for r in body.rules],
-        llm_fallback_mode=body.llm_fallback_mode,
-    )
-
-    if body.use_llm_primary:
-        annotated, llm_errors = segment_speakers_llm_primary(
-            raw_segments,
-            config=config,
-            project_id=project_id,
-            db=db,
-        )
-    elif body.use_enhanced_pipeline:
-        from app.orchestrator.services.character_builder import load_character_dict
-        char_dict = load_character_dict(project_id, db)
-        annotated, llm_errors = segment_speakers_enhanced(
-            raw_segments,
-            config=config,
-            char_dict=char_dict,
-            project_id=project_id,
-            db=db,
-        )
-    else:
-        annotated, llm_errors = segment_speakers(raw_segments, config=config)
-
-    segments_out = [
+def _annotated_to_preview_dicts(annotated) -> list:
+    """Convert AnnotatedSegment list to JSON-serialisable preview dicts."""
+    return [
         {
             "chapter_index": a.chapter_index,
             "order_index": a.order_index,
@@ -485,9 +434,180 @@ def preview_diarization(
         for a in annotated
     ]
 
-    # Return as dict to include llm_errors alongside segments
-    return {
-        "segments": segments_out,
-        "llm_errors": llm_errors,
-        "llm_error_count": len(llm_errors),
-    }
+
+@router.post("/{project_id}/preview_diarization")
+def preview_diarization(
+    project_id: str,
+    body: PreviewDiarizationRequest,
+    db: Session = Depends(get_db),
+):
+    """Run diarization with a custom rule config and return results WITHOUT saving to DB.
+
+    For LLM-heavy pipelines (use_llm_primary / use_enhanced_pipeline), returns
+    HTTP 202 with a job_id for async polling via GET .../preview_result/{job_id}.
+    For rule-based-only pipelines, returns HTTP 200 with results immediately.
+    """
+    _get_project_or_404(project_id, db)
+
+    db_segs = (
+        db.query(Segment)
+        .filter(Segment.project_id == project_id)
+        .order_by(Segment.order_index)
+        .all()
+    )
+    if not db_segs:
+        raise HTTPException(status_code=400, detail="Run preprocess first")
+
+    from app.orchestrator.services.preprocessor import RawSegment
+    seg_data = [
+        {"chapter_index": s.chapter_index, "order_index": s.order_index, "text": s.normalized_text}
+        for s in db_segs
+    ]
+
+    config = DiarizationConfig(
+        rules=[RuleSpec(rule_id=r.rule_id, enabled=r.enabled, params=r.params) for r in body.rules],
+        llm_fallback_mode=body.llm_fallback_mode,
+    )
+
+    uses_llm = body.use_llm_primary or body.use_enhanced_pipeline
+
+    # ── Synchronous path (rule-based only) ────────────────────────────────────
+    if not uses_llm:
+        raw_segments = [
+            RawSegment(chapter_index=s["chapter_index"], order_index=s["order_index"], text=s["text"])
+            for s in seg_data
+        ]
+        annotated, llm_errors = segment_speakers(raw_segments, config=config)
+        return {
+            "segments": _annotated_to_preview_dicts(annotated),
+            "llm_errors": llm_errors,
+            "llm_error_count": len(llm_errors),
+        }
+
+    # ── Async path (LLM pipelines) ───────────────────────────────────────────
+    total_segs = len(seg_data)
+    job = ProcessingJob(
+        id=str(uuid.uuid4()),
+        project_id=project_id,
+        job_type="preview_diarization",
+        status="running",
+        stage="starting",
+        stage_label="プレビュー開始",
+        total_count=total_segs,
+        started_at=datetime.utcnow(),
+    )
+    db.add(job)
+    db.commit()
+    job_id = job.id
+
+    use_llm_primary = body.use_llm_primary
+    use_enhanced = body.use_enhanced_pipeline
+
+    def _bg_preview():
+        bg_db = SessionLocal()
+        try:
+            raw_segments = [
+                RawSegment(chapter_index=s["chapter_index"], order_index=s["order_index"], text=s["text"])
+                for s in seg_data
+            ]
+
+            def _pcb(stage, pct, cur=0, total=0):
+                _update_seg_job(bg_db, job_id, stage, _seg_stage_label(stage), pct, cur, total)
+
+            if use_llm_primary:
+                annotated, llm_errors = segment_speakers_llm_primary(
+                    raw_segments, config=config,
+                    project_id=project_id, db=bg_db,
+                    progress_cb=_pcb,
+                )
+            else:
+                from app.orchestrator.services.character_builder import load_character_dict
+                char_dict = load_character_dict(project_id, bg_db)
+                annotated, llm_errors = segment_speakers_enhanced(
+                    raw_segments, config=config,
+                    char_dict=char_dict,
+                    project_id=project_id, db=bg_db,
+                    progress_cb=_pcb,
+                )
+
+            segments_out = _annotated_to_preview_dicts(annotated)
+
+            job_rec = bg_db.get(ProcessingJob, job_id)
+            if job_rec:
+                job_rec.status = "completed"
+                job_rec.stage = "complete"
+                job_rec.stage_label = "完了"
+                job_rec.progress_pct = 100
+                job_rec.finished_at = datetime.utcnow()
+                job_rec.result_data = {
+                    "segments": segments_out,
+                    "llm_errors": llm_errors,
+                    "llm_error_count": len(llm_errors),
+                }
+            bg_db.commit()
+
+        except Exception as exc:
+            logger.exception(f"Preview diarization failed: project={project_id}")
+            bg_db.rollback()
+            try:
+                job_rec = bg_db.get(ProcessingJob, job_id)
+                if job_rec:
+                    job_rec.status = "failed"
+                    job_rec.stage = "failed"
+                    job_rec.stage_label = "失敗"
+                    job_rec.error_message = str(exc)
+                    job_rec.error_category = "llm" if "llm" in str(exc).lower() else "unknown"
+                    job_rec.finished_at = datetime.utcnow()
+                    bg_db.commit()
+            except Exception:
+                pass
+        finally:
+            bg_db.close()
+
+    thread = threading.Thread(target=_bg_preview, daemon=True)
+    thread.start()
+
+    from starlette.responses import JSONResponse
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job_id,
+            "status": "running",
+            "segment_count": total_segs,
+        },
+    )
+
+
+@router.get("/{project_id}/preview_result/{job_id}")
+def get_preview_result(
+    project_id: str,
+    job_id: str,
+    db: Session = Depends(get_db),
+):
+    """Poll for async preview diarization results."""
+    job = db.get(ProcessingJob, job_id)
+    if not job or job.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status == "running":
+        return {
+            "status": "running",
+            "stage": job.stage,
+            "stage_label": job.stage_label,
+            "progress_pct": job.progress_pct,
+        }
+    elif job.status == "failed":
+        return {
+            "status": "failed",
+            "error_message": job.error_message or "Unknown error",
+            "error_category": job.error_category,
+        }
+    else:
+        # completed
+        result = job.result_data or {}
+        return {
+            "status": "completed",
+            "segments": result.get("segments", []),
+            "llm_errors": result.get("llm_errors", []),
+            "llm_error_count": result.get("llm_error_count", 0),
+        }
