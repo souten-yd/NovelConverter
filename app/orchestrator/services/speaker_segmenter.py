@@ -437,6 +437,8 @@ def segment_speakers(
         _cb("complete", 100, total_segs, total_segs)
         return annotated, llm_errors
 
+    from app.orchestrator.services.llm_manager import acquire, release
+
     llm_spec = config.get_rule("llm_refinement") if config else None
     conf_threshold = float(
         (llm_spec.params.get("confidence_threshold") if llm_spec else None) or 0.8
@@ -452,55 +454,59 @@ def segment_speakers(
         f"(threshold={conf_threshold})"
     )
 
-    for i in range(0, len(targets), BATCH_SIZE):
-        batch_num = i // BATCH_SIZE + 1
-        batch = targets[i : i + BATCH_SIZE]
+    acquire("diarization")
+    try:
+        for i in range(0, len(targets), BATCH_SIZE):
+            batch_num = i // BATCH_SIZE + 1
+            batch = targets[i : i + BATCH_SIZE]
 
-        # Progress: 20-80% range for LLM batches
-        batch_pct = 20 + int((batch_num / total_batches) * 60)
-        _cb("llm_batch", batch_pct, batch_num, total_batches)
+            # Progress: 20-80% range for LLM batches
+            batch_pct = 20 + int((batch_num / total_batches) * 60)
+            _cb("llm_batch", batch_pct, batch_num, total_batches)
 
-        batch_start = _time.time()
-        results, err = _llm_annotate_batch(annotated, batch)
-        batch_elapsed = round(_time.time() - batch_start, 1)
+            batch_start = _time.time()
+            results, err = _llm_annotate_batch(annotated, batch)
+            batch_elapsed = round(_time.time() - batch_start, 1)
 
-        logger.info(
-            f"LLM batch {batch_num}/{total_batches}: "
-            f"{len(batch)} segments, elapsed={batch_elapsed}s, "
-            f"{'OK' if err is None else 'FAILED'}"
-        )
-
-        if err is not None:
-            context_snippets = []
-            for seg in batch[:3]:
-                context_snippets.append({
-                    "order_index": seg.order_index,
-                    "text_excerpt": seg.normalized_text[:80],
-                    "predicted_speaker": seg.predicted_speaker,
-                    "confidence": round(seg.confidence, 3),
-                })
-            llm_errors.append({
-                "batch_order_indices": err.batch_order_indices,
-                "exception_type": err.exception_type,
-                "message": err.message,
-                "raw_response_excerpt": err.raw_response_excerpt,
-                "context_snippets": context_snippets,
-            })
-            logger.warning(
-                f"LLM batch failed: indices={err.batch_order_indices} "
-                f"type={err.exception_type} msg={err.message}"
+            logger.info(
+                f"LLM batch {batch_num}/{total_batches}: "
+                f"{len(batch)} segments, elapsed={batch_elapsed}s, "
+                f"{'OK' if err is None else 'FAILED'}"
             )
-            continue
 
-        result_map = {r["order_index"]: r for r in results}
+            if err is not None:
+                context_snippets = []
+                for seg in batch[:3]:
+                    context_snippets.append({
+                        "order_index": seg.order_index,
+                        "text_excerpt": seg.normalized_text[:80],
+                        "predicted_speaker": seg.predicted_speaker,
+                        "confidence": round(seg.confidence, 3),
+                    })
+                llm_errors.append({
+                    "batch_order_indices": err.batch_order_indices,
+                    "exception_type": err.exception_type,
+                    "message": err.message,
+                    "raw_response_excerpt": err.raw_response_excerpt,
+                    "context_snippets": context_snippets,
+                })
+                logger.warning(
+                    f"LLM batch failed: indices={err.batch_order_indices} "
+                    f"type={err.exception_type} msg={err.message}"
+                )
+                continue
 
-        for seg in batch:
-            if seg.order_index in result_map:
-                r = result_map[seg.order_index]
-                seg.segment_type = r.get("segment_type", seg.segment_type)
-                seg.predicted_speaker = r.get("predicted_speaker", seg.predicted_speaker)
-                seg.confidence = float(r.get("confidence", seg.confidence))
-                seg.reason = r.get("reason", seg.reason) + " (llm)"
+            result_map = {r["order_index"]: r for r in results}
+
+            for seg in batch:
+                if seg.order_index in result_map:
+                    r = result_map[seg.order_index]
+                    seg.segment_type = r.get("segment_type", seg.segment_type)
+                    seg.predicted_speaker = r.get("predicted_speaker", seg.predicted_speaker)
+                    seg.confidence = float(r.get("confidence", seg.confidence))
+                    seg.reason = r.get("reason", seg.reason) + " (llm)"
+    finally:
+        release("diarization")
 
     _cb("speaker_propagation", 85, 0, total_segs)
     _maybe_apply_propagation(annotated, config)
@@ -793,6 +799,8 @@ def segment_speakers_enhanced(
         run_llm = run_llm and (config.get_rule("llm_refinement") is not None)
 
     if run_llm:
+        from app.orchestrator.services.llm_manager import acquire, release
+
         llm_spec = config.get_rule("llm_refinement") if config else None
         conf_threshold = float(
             (llm_spec.params.get("confidence_threshold") if llm_spec else None) or 0.8
@@ -808,42 +816,46 @@ def segment_speakers_enhanced(
             f"LLM v2 refinement: {len(targets)} segments in {total_batches} batches"
         )
 
-        for i in range(0, len(targets), BATCH_SIZE):
-            batch_num = i // BATCH_SIZE + 1
-            batch = targets[i: i + BATCH_SIZE]
-            batch_pct = 30 + int((batch_num / total_batches) * 40)
-            _cb("llm_batch", batch_pct, batch_num, total_batches)
+        acquire("diarization_v2")
+        try:
+            for i in range(0, len(targets), BATCH_SIZE):
+                batch_num = i // BATCH_SIZE + 1
+                batch = targets[i: i + BATCH_SIZE]
+                batch_pct = 30 + int((batch_num / total_batches) * 40)
+                _cb("llm_batch", batch_pct, batch_num, total_batches)
 
-            t0 = _time.time()
-            results, err = _llm_annotate_batch_v2(annotated, batch, candidate_map)
-            elapsed = round(_time.time() - t0, 1)
-            logger.info(
-                f"LLM v2 batch {batch_num}/{total_batches}: "
-                f"{len(batch)} segs, {elapsed}s, {'OK' if err is None else 'FAIL'}"
-            )
+                t0 = _time.time()
+                results, err = _llm_annotate_batch_v2(annotated, batch, candidate_map)
+                elapsed = round(_time.time() - t0, 1)
+                logger.info(
+                    f"LLM v2 batch {batch_num}/{total_batches}: "
+                    f"{len(batch)} segs, {elapsed}s, {'OK' if err is None else 'FAIL'}"
+                )
 
-            if err is not None:
-                llm_errors.append({
-                    "batch_order_indices": err.batch_order_indices,
-                    "exception_type": err.exception_type,
-                    "message": err.message,
-                    "raw_response_excerpt": err.raw_response_excerpt,
-                })
-                continue
+                if err is not None:
+                    llm_errors.append({
+                        "batch_order_indices": err.batch_order_indices,
+                        "exception_type": err.exception_type,
+                        "message": err.message,
+                        "raw_response_excerpt": err.raw_response_excerpt,
+                    })
+                    continue
 
-            result_map = {r["order_index"]: r for r in results}
-            for seg in batch:
-                if seg.order_index in result_map:
-                    r = result_map[seg.order_index]
-                    # Resolve speaker from character_id → canonical name
-                    speaker_id = r.get("speaker", "unknown")
-                    entry = char_dict.find_by_id(speaker_id) if speaker_id != "unknown" else None
-                    seg.predicted_speaker = entry.canonical_name if entry else speaker_id
-                    seg.character_id = speaker_id if speaker_id != "unknown" else None
-                    seg.confidence = float(r.get("confidence", seg.confidence))
-                    seg.evidence_spans = r.get("evidence_spans", [])
-                    seg.needs_review = bool(r.get("needs_review", False))
-                    seg.reason = r.get("reason_short", seg.reason) + " (llm_v2)"
+                result_map = {r["order_index"]: r for r in results}
+                for seg in batch:
+                    if seg.order_index in result_map:
+                        r = result_map[seg.order_index]
+                        # Resolve speaker from character_id → canonical name
+                        speaker_id = r.get("speaker", "unknown")
+                        entry = char_dict.find_by_id(speaker_id) if speaker_id != "unknown" else None
+                        seg.predicted_speaker = entry.canonical_name if entry else speaker_id
+                        seg.character_id = speaker_id if speaker_id != "unknown" else None
+                        seg.confidence = float(r.get("confidence", seg.confidence))
+                        seg.evidence_spans = r.get("evidence_spans", [])
+                        seg.needs_review = bool(r.get("needs_review", False))
+                        seg.reason = r.get("reason_short", seg.reason) + " (llm_v2)"
+        finally:
+            release("diarization_v2")
     else:
         logger.info("LLM disabled – skipping LLM v2 refinement")
 
@@ -888,7 +900,7 @@ def segment_speakers_llm_primary(
     llm_errors: List[dict] = []
 
     # Reconstruct full text from raw segments
-    full_text = "\n".join(seg.normalized_text or seg.raw_text for seg in raw_segments)
+    full_text = "\n".join(seg.text for seg in raw_segments)
 
     # Extract known character names from segments if not provided
     if not known_characters:

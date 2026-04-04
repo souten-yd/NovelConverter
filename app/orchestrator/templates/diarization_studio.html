@@ -425,7 +425,8 @@ async function runPreview() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rules, llm_fallback_mode, use_enhanced_pipeline, use_llm_primary }),
     });
-    if (!r.ok) {
+
+    if (!r.ok && r.status !== 202) {
       let errDetail = '';
       try { const e = await r.json(); errDetail = e.detail || JSON.stringify(e); }
       catch(_) { errDetail = `HTTP ${r.status}`; }
@@ -433,22 +434,17 @@ async function runPreview() {
       status.style.color = 'red';
       return;
     }
+
     const resp = await r.json();
 
-    // Support both old (array) and new ({segments, llm_errors}) response shapes
-    if (Array.isArray(resp)) {
-      previewData = resp;
-    } else {
-      previewData = resp.segments || [];
-      renderLlmErrors(resp.llm_errors || []);
+    // Async path: backend returned 202 with job_id – poll for results
+    if (r.status === 202 && resp.job_id) {
+      await _pollPreviewJob(resp.job_id, status);
+      return;
     }
 
-    renderPreview(previewData);
-    const errCount = Array.isArray(resp) ? 0 : (resp.llm_error_count || 0);
-    status.textContent = `完了: ${previewData.length} セグメント${errCount > 0 ? ` (LLMエラー: ${errCount})` : ''}`;
-    status.style.color = errCount > 0 ? '#c05621' : '';
-    document.getElementById('btnSave').disabled = false;
-    _maybeAutoSwitchToPreview();
+    // Sync path: results returned immediately
+    _applyPreviewResult(resp, status);
   } catch(err) {
     status.textContent = 'エラー: ' + err.message;
     status.style.color = 'red';
@@ -456,6 +452,65 @@ async function runPreview() {
   } finally {
     btn.disabled = false;
   }
+}
+
+async function _pollPreviewJob(jobId, statusEl) {
+  const POLL_INTERVAL = 2000; // 2 seconds
+  const MAX_POLLS = 300;      // 10 minutes max
+  for (let i = 0; i < MAX_POLLS; i++) {
+    await new Promise(r => setTimeout(r, POLL_INTERVAL));
+    try {
+      const r = await fetch(`/api/projects/${projectId}/preview_result/${jobId}`);
+      if (!r.ok) {
+        statusEl.textContent = '失敗: ポーリングエラー HTTP ' + r.status;
+        statusEl.style.color = 'red';
+        return;
+      }
+      const data = await r.json();
+
+      if (data.status === 'running') {
+        const pct = data.progress_pct || 0;
+        const label = data.stage_label || 'LLM分析中';
+        statusEl.textContent = `${label}... (${pct}%)`;
+        statusEl.style.color = '#6d28d9';
+        continue;
+      }
+
+      if (data.status === 'failed') {
+        statusEl.textContent = '失敗: ' + (data.error_message || '不明なエラー');
+        statusEl.style.color = 'red';
+        return;
+      }
+
+      // completed
+      _applyPreviewResult(data, statusEl);
+      return;
+    } catch (err) {
+      console.error('[_pollPreviewJob] poll error:', err);
+      statusEl.textContent = 'ポーリングエラー: ' + err.message;
+      statusEl.style.color = 'red';
+      return;
+    }
+  }
+  statusEl.textContent = '失敗: タイムアウト (最大ポーリング回数超過)';
+  statusEl.style.color = 'red';
+}
+
+function _applyPreviewResult(resp, statusEl) {
+  // Support both old (array) and new ({segments, llm_errors}) response shapes
+  if (Array.isArray(resp)) {
+    previewData = resp;
+  } else {
+    previewData = resp.segments || [];
+    renderLlmErrors(resp.llm_errors || []);
+  }
+
+  renderPreview(previewData);
+  const errCount = Array.isArray(resp) ? 0 : (resp.llm_error_count || 0);
+  statusEl.textContent = `完了: ${previewData.length} セグメント${errCount > 0 ? ` (LLMエラー: ${errCount})` : ''}`;
+  statusEl.style.color = errCount > 0 ? '#c05621' : '';
+  document.getElementById('btnSave').disabled = false;
+  _maybeAutoSwitchToPreview();
 }
 
 function renderPreview(data) {
