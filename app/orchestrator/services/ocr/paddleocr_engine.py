@@ -11,6 +11,17 @@ from app.shared.logger import get_logger
 logger = get_logger("ocr.paddleocr")
 
 
+class _WarnOnce:
+    """Emit a logger.warning exactly once per unique message per process."""
+    _seen: set = set()
+
+    @classmethod
+    def warn(cls, log, msg: str) -> None:
+        if msg not in cls._seen:
+            cls._seen.add(msg)
+            log.warning(msg)
+
+
 def _get_paddleocr_version() -> str:
     """Return installed PaddleOCR version string, or 'unknown'."""
     try:
@@ -94,7 +105,7 @@ class PaddleOCREngine(OCREngine):
                 f"{PaddleOCREngine._init_error}"
             )
 
-        return True, ""
+        return True, f"version={version}"
 
     def get_preprocessing_strategies(self) -> list[str]:
         return ["original", "grayscale"]
@@ -119,14 +130,19 @@ class PaddleOCREngine(OCREngine):
             return 0
 
     @classmethod
-    def _build_init_kwargs(cls, paddle_lang: str) -> dict:
-        """Build PaddleOCR constructor kwargs for 3.x."""
+    def _build_init_kwargs(cls, paddle_lang: str, force_no_layout: bool = False) -> dict:
+        """Build PaddleOCR constructor kwargs for 3.x.
+
+        ``force_no_layout`` disables the document layout kwargs even when
+        ``_use_layout`` is True.  Used by the layout-retry fallback in
+        ``_init_ocr`` when PaddleX raises a compatibility error.
+        """
         kwargs: dict[str, Any] = {
             "lang": paddle_lang,
             "device": cls._resolved_device,
         }
         # 3.x の正式設定キーのみを利用（未対応環境でも安全に無視されるよう最小限）
-        if cls._use_layout:
+        if cls._use_layout and not force_no_layout:
             kwargs["use_doc_orientation_classify"] = True
             kwargs["use_doc_unwarping"] = True
             kwargs["use_textline_orientation"] = True
@@ -134,10 +150,16 @@ class PaddleOCREngine(OCREngine):
 
     @classmethod
     def _init_ocr(cls, paddle_lang: str) -> None:
-        """Initialize singleton PaddleOCR instance.
+        """Initialize singleton PaddleOCR instance with smoke test and layout retry.
 
         - PaddleOCR 3.x のみを許可
-        - Caches initialization error in _init_error so calls fail fast
+        - Caches initialization error in _init_error so calls fail fast (no per-page spam)
+        - Stage 1: Constructor call; if layout kwargs trigger a compatibility error
+          (e.g. "unexpected keyword argument 'cls'" from PaddleX internals), retries
+          without layout kwargs.
+        - Stage 2: Predict-time smoke test with a tiny dummy image; catches
+          TypeError/RuntimeError that only surface at predict() time (not at __init__).
+          Same layout-retry logic applies here.
         """
         if cls._ocr_instance is not None:
             return
@@ -160,17 +182,67 @@ class PaddleOCREngine(OCREngine):
         cls._resolved_device = cls._resolve_device(cls._device)
         logger.info(f"Initializing PaddleOCR (version={version}, lang={paddle_lang})")
 
-        kwargs = cls._build_init_kwargs(paddle_lang)
+        def _is_compat_error(exc: Exception) -> bool:
+            """Return True for known PaddleX/Paddle version-mismatch errors."""
+            msg = str(exc).lower()
+            return "cls" in msg or "convertpirattribute" in msg
 
+        # ── Stage 1: constructor (with layout-retry fallback) ────────────────
+        kwargs = cls._build_init_kwargs(paddle_lang)
         try:
-            cls._ocr_instance = PaddleOCR(**kwargs)
-            logger.info(f"PaddleOCR initialized successfully (version={version})")
+            instance = PaddleOCR(**kwargs)
         except Exception as exc:
-            cls._init_error = str(exc)
-            logger.error(
-                f"PaddleOCR initialization failed (version={version}): {exc}"
-            )
-            raise RuntimeError(cls._init_error) from exc
+            if cls._use_layout and _is_compat_error(exc):
+                _WarnOnce.warn(
+                    logger,
+                    f"PaddleOCR layout init failed ({exc}); retrying without layout kwargs.",
+                )
+                try:
+                    instance = PaddleOCR(**cls._build_init_kwargs(paddle_lang, force_no_layout=True))
+                    logger.info("PaddleOCR initialized without layout kwargs (compatibility fallback).")
+                except Exception as exc2:
+                    cls._init_error = str(exc2)
+                    logger.error(f"PaddleOCR initialization failed (version={version}): {exc2}")
+                    raise RuntimeError(cls._init_error) from exc2
+            else:
+                cls._init_error = str(exc)
+                logger.error(f"PaddleOCR initialization failed (version={version}): {exc}")
+                raise RuntimeError(cls._init_error) from exc
+
+        # ── Stage 2: predict-time smoke test ────────────────────────────────
+        # Catches errors that only appear when predict() is called (e.g. the
+        # "unexpected keyword argument 'cls'" raised inside PaddleX pipeline).
+        try:
+            import numpy as np
+            dummy = np.full((32, 32, 3), 255, dtype=np.uint8)
+            instance.predict(dummy)
+            logger.info(f"PaddleOCR smoke test passed (version={version})")
+        except TypeError as exc:
+            if _is_compat_error(exc):
+                _WarnOnce.warn(
+                    logger,
+                    f"PaddleOCR smoke test TypeError '{exc}'; disabling layout and reinitialising.",
+                )
+                try:
+                    instance = PaddleOCR(**cls._build_init_kwargs(paddle_lang, force_no_layout=True))
+                    instance.predict(dummy)
+                    logger.info("PaddleOCR smoke test passed after layout disable.")
+                except Exception as exc3:
+                    cls._init_error = str(exc3)
+                    logger.error(f"PaddleOCR smoke test failed after retry: {exc3}")
+                    raise RuntimeError(cls._init_error) from exc3
+            else:
+                cls._init_error = str(exc)
+                logger.error(f"PaddleOCR smoke test unexpected TypeError: {exc}")
+                raise RuntimeError(cls._init_error) from exc
+        except Exception:
+            # Non-TypeError from a blank image (e.g. "no text regions detected")
+            # is non-fatal — the smoke test goal is specifically to catch TypeError.
+            logger.debug("PaddleOCR smoke test raised non-TypeError; treating as non-fatal.")
+
+        # Assign only after both constructor and smoke test succeed.
+        cls._ocr_instance = instance
+        logger.info(f"PaddleOCR ready (version={version})")
 
     @staticmethod
     def _resolve_device(requested_device: str) -> str:

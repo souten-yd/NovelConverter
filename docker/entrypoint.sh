@@ -103,7 +103,7 @@ mkdir -p \
 
 echo "[entrypoint] Data dir: ${DATA_DIR:-/workspace/data}"
 echo "[entrypoint] HF cache: ${HF_HOME:-/workspace/hf_cache}"
-echo "[entrypoint] Mock mode: BASE=${TTS_BASE_USE_REAL:-false} CUSTOM=${TTS_CUSTOM_USE_REAL:-false} DESIGN=${TTS_DESIGN_USE_REAL:-false}"
+echo "[entrypoint] TTS workers: BASE_USE_REAL=${TTS_BASE_USE_REAL:-false} CUSTOM_USE_REAL=${TTS_CUSTOM_USE_REAL:-false} DESIGN_USE_REAL=${TTS_DESIGN_USE_REAL:-false}  (true=real model, false=mock)"
 echo "[entrypoint] LLM API:   ${LLM_API_URL:-(not set, rule-based only)}"
 export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK="${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK:-True}"
 echo "[entrypoint] Paddle model source check disabled: ${PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK}"
@@ -208,6 +208,29 @@ except Exception as e:
     print(f"  [info]    Could not inspect PaddleOCR signature: {e}")
 PADDLECHECK
 
+# ── PaddleOCR engine smoke test ───────────────────────────────────────────────
+# Runs in a subprocess so _init_error state does NOT leak into the server process.
+echo "[entrypoint] PaddleOCR engine smoke test:"
+cd "${APP_DIR:-/workspace/NovelConverter}" 2>/dev/null || true
+python3 - <<'PADDLESMOKE'
+import sys
+try:
+    from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
+    PaddleOCREngine.configure(device="cpu", use_layout=False)
+    engine = PaddleOCREngine()
+    available, reason = engine.is_available()
+    if available:
+        try:
+            PaddleOCREngine._init_ocr("japan")
+            print(f"  [ok]      PaddleOCR engine initialised ({reason})")
+        except Exception as init_exc:
+            print(f"  [FAILED]  PaddleOCR init error: {init_exc}", file=sys.stderr)
+    else:
+        print(f"  [MISSING] PaddleOCR not available: {reason}", file=sys.stderr)
+except Exception as e:
+    print(f"  [ERROR]   PaddleOCR smoke test exception: {e}", file=sys.stderr)
+PADDLESMOKE
+
 # ── PaddleOCR model cache integrity check ───────────────────────────────────
 # PP-LCNet_x1_0_doc_ori is used by PaddleX's document orientation classifier.
 # If the directory exists but inference.yml is missing, the cache is incomplete
@@ -270,7 +293,7 @@ if [ -n "${NDLOCR_BIN}" ]; then
     else
         echo "[entrypoint] NDLOCR-Lite: No model files found in ${NDLOCR_MODEL_DIR}."
         echo "[entrypoint]   Attempting automatic model download..."
-        if python3 scripts/download_ndlocr_models.py; then
+        if python3 "${APP_DIR:-/workspace/NovelConverter}/scripts/download_ndlocr_models.py"; then
             model_count=$(find "${NDLOCR_MODEL_DIR}" \( -name "*.pth" -o -name "*.pt" -o -name "*.onnx" -o -name "*.pdparams" -o -name "*.bin" -o -name "*.npz" \) 2>/dev/null | wc -l)
         else
             model_count=0
@@ -281,7 +304,7 @@ if [ -n "${NDLOCR_BIN}" ]; then
         else
             echo "[entrypoint] WARNING: NDLOCR-Lite model download failed or no model files found."
             echo "[entrypoint]   NDLOCR-Lite engine will report unavailable until models are present."
-            echo "[entrypoint]   Manual fallback: python3 scripts/download_ndlocr_models.py"
+            echo "[entrypoint]   Manual fallback: python3 ${APP_DIR:-/workspace/NovelConverter}/scripts/download_ndlocr_models.py"
         fi
     fi
 else
