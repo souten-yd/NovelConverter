@@ -1,6 +1,7 @@
 """LLM server manager – launch/stop llama.cpp server, manage GGUF models."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -8,7 +9,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import requests
 
@@ -22,6 +23,18 @@ MODELS_DIR_NAME = "models"
 
 _STARTUP_TIMEOUT = 60  # seconds to wait for llama-server to become ready
 _HEALTH_INTERVAL = 2   # seconds between health-check polls
+_AUTO_UNLOAD_CHECK_INTERVAL = 30  # seconds between auto-unload checks
+
+# Default per-model settings shape
+_DEFAULT_MODEL_SETTINGS: dict = {
+    "n_gpu_layers": -1,
+    "ctx_size": 4096,
+    "batch_size": 512,
+    "threads": -1,      # -1 = llama.cpp default
+    "flash_attn": False,
+    "auto_unload_seconds": 0,  # 0 = disabled
+    "is_main_model": False,
+}
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -35,11 +48,15 @@ class LlmServerState:
     pid: Optional[int] = None
     error: str = ""
     stderr: str = ""
+    last_used_at: Optional[float] = None   # unix timestamp
+    load_params: dict = field(default_factory=dict)
 
 
 _state = LlmServerState()
 _proc: Optional[subprocess.Popen] = None
 _lock = threading.Lock()
+_auto_unload_thread: Optional[threading.Thread] = None
+_auto_unload_running = False
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -104,6 +121,113 @@ def _update_env_url(url: str) -> None:
     os.environ["LLM_API_URL"] = url
 
 
+# ── Model settings persistence ────────────────────────────────────────────────
+
+def _settings_path() -> Path:
+    return _models_dir() / "llm_settings.json"
+
+
+def load_model_settings() -> Dict[str, dict]:
+    """Load per-model settings from disk. Returns dict: filename → settings."""
+    p = _settings_path()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logger.warning(f"Failed to load llm_settings.json: {e}")
+        return {}
+
+
+def save_model_settings(settings: Dict[str, dict]) -> None:
+    """Persist per-model settings to disk."""
+    try:
+        _settings_path().write_text(
+            json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to save llm_settings.json: {e}")
+
+
+def get_model_setting(model_filename: str) -> dict:
+    """Get settings for a single model (merged with defaults)."""
+    all_settings = load_model_settings()
+    stored = all_settings.get(model_filename, {})
+    merged = dict(_DEFAULT_MODEL_SETTINGS)
+    merged.update(stored)
+    return merged
+
+
+def update_model_setting(model_filename: str, updates: dict) -> dict:
+    """Update settings for a model and persist. Returns new merged settings."""
+    all_settings = load_model_settings()
+    existing = all_settings.get(model_filename, {})
+    existing.update(updates)
+    # If this model is set as main, unset others
+    if updates.get("is_main_model"):
+        for fn in list(all_settings.keys()):
+            if fn != model_filename:
+                all_settings[fn]["is_main_model"] = False
+    all_settings[model_filename] = existing
+    save_model_settings(all_settings)
+    return get_model_setting(model_filename)
+
+
+def get_main_model() -> Optional[str]:
+    """Return filename of the model marked as main (or None)."""
+    for fn, settings in load_model_settings().items():
+        if settings.get("is_main_model"):
+            return fn
+    return None
+
+
+# ── Auto-unload watcher ───────────────────────────────────────────────────────
+
+def _auto_unload_watcher() -> None:
+    global _auto_unload_running
+    logger.info("Auto-unload watcher started")
+    while _auto_unload_running:
+        time.sleep(_AUTO_UNLOAD_CHECK_INTERVAL)
+        with _lock:
+            if _state.status != "running":
+                continue
+            model_fn = _state.model_filename
+            last_used = _state.last_used_at
+
+        setting = get_model_setting(model_fn)
+        idle_timeout = int(setting.get("auto_unload_seconds", 0))
+        if idle_timeout <= 0:
+            continue  # disabled for this model
+        if last_used is None:
+            continue
+        idle_secs = time.time() - last_used
+        if idle_secs >= idle_timeout:
+            logger.info(
+                f"Auto-unloading model {model_fn!r} after {idle_secs:.0f}s idle "
+                f"(timeout={idle_timeout}s)"
+            )
+            unload_model()
+
+
+def start_auto_unload_watcher() -> None:
+    global _auto_unload_thread, _auto_unload_running
+    if _auto_unload_thread and _auto_unload_thread.is_alive():
+        return  # already running
+    _auto_unload_running = True
+    _auto_unload_thread = threading.Thread(
+        target=_auto_unload_watcher, daemon=True, name="llm-auto-unload"
+    )
+    _auto_unload_thread.start()
+
+
+def touch_last_used() -> None:
+    """Record that the LLM was just used. Call from speaker_segmenter etc."""
+    with _lock:
+        if _state.status == "running":
+            _state.last_used_at = time.time()
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def get_server_status() -> LlmServerState:
@@ -119,10 +243,35 @@ def get_server_status() -> LlmServerState:
         return LlmServerState(**_state.__dict__)
 
 
+def get_server_status_dict() -> dict:
+    """Full status dict suitable for API response, includes computed fields."""
+    state = get_server_status()
+    now = time.time()
+    idle_seconds = round(now - state.last_used_at, 1) if state.last_used_at else None
+    setting = get_model_setting(state.model_filename) if state.model_filename else {}
+    return {
+        "status": state.status,
+        "model_filename": state.model_filename,
+        "model_path": state.model_path,
+        "port": state.port,
+        "pid": state.pid,
+        "error": state.error,
+        "stderr": state.stderr,
+        "binary_available": check_binary_available(),
+        "last_used_at": state.last_used_at,
+        "idle_seconds": idle_seconds,
+        "load_params": state.load_params,
+        "auto_unload_seconds": setting.get("auto_unload_seconds", 0),
+    }
+
+
 def load_model(
     model_filename: str,
     n_gpu_layers: int = -1,
     ctx_size: int = 4096,
+    batch_size: int = 512,
+    threads: int = -1,
+    flash_attn: bool = False,
 ) -> LlmServerState:
     global _state, _proc
 
@@ -134,11 +283,19 @@ def load_model(
         if not model_path.exists():
             raise FileNotFoundError(f"Model not found: {model_filename}")
 
+        _load_params = {
+            "n_gpu_layers": n_gpu_layers,
+            "ctx_size": ctx_size,
+            "batch_size": batch_size,
+            "threads": threads,
+            "flash_attn": flash_attn,
+        }
         _state = LlmServerState(
             status="loading",
             model_filename=model_filename,
             model_path=str(model_path),
             port=LLAMA_SERVER_PORT,
+            load_params=_load_params,
         )
 
     llama_bin = _resolve_llama_server_bin()
@@ -159,8 +316,13 @@ def load_model(
         "--port", str(LLAMA_SERVER_PORT),
         "--n-gpu-layers", str(n_gpu_layers),
         "--ctx-size", str(ctx_size),
+        "--batch-size", str(batch_size),
         "--host", "127.0.0.1",
     ]
+    if threads > 0:
+        cmd += ["--threads", str(threads)]
+    if flash_attn:
+        cmd += ["--flash-attn"]
     logger.info(f"Launching llama-server: {' '.join(cmd)}")
 
     try:
@@ -221,9 +383,14 @@ def load_model(
     with _lock:
         _state.status = "running"
         _state.error = ""
+        _state.last_used_at = time.time()
 
     _update_env_url(f"http://127.0.0.1:{LLAMA_SERVER_PORT}/v1")
     logger.info(f"llama-server running on port {LLAMA_SERVER_PORT}, model={model_filename}")
+
+    # Start auto-unload watcher (no-op if already running)
+    start_auto_unload_watcher()
+
     return LlmServerState(**_state.__dict__)
 
 
@@ -249,15 +416,19 @@ def unload_model() -> None:
 # ── Local model management ────────────────────────────────────────────────────
 
 def list_local_models() -> List[dict]:
+    all_settings = load_model_settings()
     models = []
     for path in sorted(_models_dir().glob("*.gguf")):
         size_bytes = path.stat().st_size
         loaded = _state.model_filename == path.name and _state.status == "running"
+        settings = dict(_DEFAULT_MODEL_SETTINGS)
+        settings.update(all_settings.get(path.name, {}))
         models.append({
             "filename": path.name,
             "size_bytes": size_bytes,
             "size_mb": round(size_bytes / (1024 * 1024), 1),
             "loaded": loaded,
+            "settings": settings,
         })
     return models
 
