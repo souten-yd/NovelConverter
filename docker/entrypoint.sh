@@ -268,11 +268,21 @@ if [ -n "${NDLOCR_BIN}" ]; then
     if [ "${model_count}" -gt 0 ]; then
         echo "[entrypoint] NDLOCR-Lite: ${model_count} model file(s) already present in ${NDLOCR_MODEL_DIR} – skipping download"
     else
-        echo "[entrypoint] WARNING: NDLOCR-Lite: No model files found in ${NDLOCR_MODEL_DIR}."
-        echo "[entrypoint]   Models are NOT bundled with ndlocr-lite and must be downloaded separately."
-        echo "[entrypoint]   Run: python3 scripts/download_ndlocr_models.py"
-        echo "[entrypoint]   Or manually download from https://github.com/ndl-lab/ndlocr-lite"
-        echo "[entrypoint]   NDLOCR-Lite engine will report unavailable until models are present."
+        echo "[entrypoint] NDLOCR-Lite: No model files found in ${NDLOCR_MODEL_DIR}."
+        echo "[entrypoint]   Attempting automatic model download..."
+        if python3 scripts/download_ndlocr_models.py; then
+            model_count=$(find "${NDLOCR_MODEL_DIR}" \( -name "*.pth" -o -name "*.pt" -o -name "*.onnx" -o -name "*.pdparams" -o -name "*.bin" -o -name "*.npz" \) 2>/dev/null | wc -l)
+        else
+            model_count=0
+        fi
+
+        if [ "${model_count}" -gt 0 ]; then
+            echo "[entrypoint] NDLOCR-Lite: model download completed (${model_count} file(s))"
+        else
+            echo "[entrypoint] WARNING: NDLOCR-Lite model download failed or no model files found."
+            echo "[entrypoint]   NDLOCR-Lite engine will report unavailable until models are present."
+            echo "[entrypoint]   Manual fallback: python3 scripts/download_ndlocr_models.py"
+        fi
     fi
 else
     echo "[entrypoint] WARNING: NDLOCR-Lite CLI not found – NDLOCR-Lite engine will be unavailable"
