@@ -34,40 +34,87 @@
   </div>
 </div>
 
-<!-- Model Status Panel -->
+<!-- Runtime Status Panel -->
 <div id="modelStatusPanel" style="margin-bottom:16px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:0.85em">
-  <div style="font-weight:600;margin-bottom:8px">モデル状態</div>
-  <div id="modelStatusContent" style="display:flex;gap:16px;flex-wrap:wrap">
+  <div style="font-weight:600;margin-bottom:8px">実行状態（OCR / TTS / LLM / VLM）</div>
+  <div id="modelStatusContent" style="display:flex;gap:10px;flex-direction:column">
     <span style="color:#64748b">読み込み中...</span>
   </div>
 </div>
 <script>
-(async function loadModelStatus() {
+function _badge(text, color) {
+  return `<span style="padding:2px 8px;border-radius:4px;border:1px solid ${color};color:${color};display:inline-block">${text}</span>`;
+}
+function _statusColor(st) {
+  if (st === 'running') return '#16a34a';
+  if (st === 'loading' || st === 'stopping') return '#d97706';
+  if (st === 'error') return '#dc2626';
+  return '#64748b';
+}
+(async function loadRuntimeStatus() {
   try {
-    const r = await fetch('/api/system/models');
+    const r = await fetch(`/api/runtime/status?project_id=${encodeURIComponent(projectId)}`);
     if (!r.ok) return;
     const d = await r.json();
     const el = document.getElementById('modelStatusContent');
     if (!el) return;
+    const engines = d?.engines || {};
+    const ocr = engines.ocr || {};
+    const tts = engines.tts || {};
+    const llm = engines.llm || {};
+    const vlm = engines.vlm || {};
+    const project = d?.project || {};
+
     let html = '';
-    // TTS models
-    const ttsModels = d.qwen3_tts || {};
-    for (const [key, info] of Object.entries(ttsModels)) {
-      const st = info.status || 'unknown';
-      const color = st === 'ok' ? '#16a34a' : st === 'incomplete' ? '#d97706' : '#dc2626';
-      const label = key === 'tokenizer' ? 'Tokenizer' : key === 'custom' ? 'CustomVoice' : key === 'design' ? 'VoiceDesign' : key === 'base' ? 'Base' : key;
-      html += `<span style="padding:2px 8px;border-radius:4px;border:1px solid ${color};color:${color}">${label}: ${st}</span>`;
+    // OCR
+    const ocrBadges = Object.entries(ocr).map(([k, st]) => {
+      const state = st?.status || (st?.loaded ? 'running' : 'stopped');
+      const model = st?.current_model ? ` · model=${st.current_model}` : '';
+      const dev = st?.device ? ` · ${st.device}` : '';
+      return _badge(`OCR/${k}: ${state}${dev}${model}`, _statusColor(state));
+    }).join(' ');
+    html += `<div><b>OCR:</b> ${ocrBadges || '<span style="color:#64748b">なし</span>'}</div>`;
+
+    // TTS
+    const ttsBadges = Object.entries(tts).map(([k, st]) => {
+      const state = st?.status || (st?.alive ? 'running' : 'stopped');
+      const model = st?.model_status?.model_path ? ` · ${st.model_status.model_path}` : '';
+      const dev = st?.device ? ` · ${st.device}` : '';
+      return _badge(`TTS/${k}: ${state}${dev}${model}`, _statusColor(state));
+    }).join(' ');
+    html += `<div><b>TTS:</b> ${ttsBadges || '<span style="color:#64748b">なし</span>'}</div>`;
+
+    // LLM/VLM
+    const llmState = llm?.status || 'unknown';
+    const llmName = llm?.current_model ? ` · ${llm.current_model}` : '';
+    html += `<div><b>LLM:</b> ${_badge(`LLM: ${llmState}${llmName}`, _statusColor(llmState))}</div>`;
+    const vlmState = vlm?.status || 'unknown';
+    const vlmName = vlm?.current_model ? ` · ${vlm.current_model}` : '';
+    html += `<div><b>VLM:</b> ${_badge(`Qwen-VL: ${vlmState}${vlmName}`, _statusColor(vlmState))}</div>`;
+
+    // Voice preset usage (project-scoped)
+    const presetUsage = Array.isArray(project?.preset_usage) ? project.preset_usage : [];
+    const workerUsage = project?.worker_usage || {};
+    const presetText = presetUsage.length
+      ? presetUsage.map(x => `${x.preset_id}: ${x.count}`).join(' / ')
+      : '未設定';
+    html += `<div><b>Voice preset usage:</b> <span style="color:#334155">${presetText}</span></div>`;
+    html += `<div><b>Worker usage:</b> <span style="color:#334155">base=${workerUsage.base || 0}, custom=${workerUsage.custom || 0}, design=${workerUsage.design || 0}</span></div>`;
+
+    // Last errors
+    const errLines = [];
+    for (const [k, st] of Object.entries(ocr)) if (st?.last_error) errLines.push(`OCR/${k}: ${st.last_error}`);
+    for (const [k, st] of Object.entries(tts)) if (st?.last_error) errLines.push(`TTS/${k}: ${st.last_error}`);
+    if (llm?.last_error) errLines.push(`LLM: ${llm.last_error}`);
+    if (vlm?.last_error) errLines.push(`VLM: ${vlm.last_error}`);
+    if (errLines.length) {
+      html += `<div><b>Last errors:</b><ul style="margin:4px 0 0 16px;color:#b91c1c">${errLines.map(x => `<li>${x}</li>`).join('')}</ul></div>`;
     }
-    // LLM
-    const llm = d.llm || {};
-    const llmColor = llm.ready ? '#16a34a' : '#dc2626';
-    html += `<span style="padding:2px 8px;border-radius:4px;border:1px solid ${llmColor};color:${llmColor}">LLM: ${llm.status || 'unknown'}</span>`;
-    // LLM runtime
-    const rt = d.llm_runtime || {};
-    const rtColor = rt.llm_status === 'running' ? '#16a34a' : rt.llm_status === 'loading' ? '#d97706' : '#64748b';
-    html += `<span style="padding:2px 8px;border-radius:4px;border:1px solid ${rtColor};color:${rtColor}">LLMサーバ: ${rt.llm_status || 'stopped'}</span>`;
+
     el.innerHTML = html;
-  } catch(e) { console.warn('Model status load failed:', e); }
+  } catch (e) {
+    console.warn('Runtime status load failed:', e);
+  }
 })();
 </script>
 

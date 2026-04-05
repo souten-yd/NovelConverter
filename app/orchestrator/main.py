@@ -14,7 +14,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.shared.database import init_db
 from app.shared.logger import get_logger
 from app.shared.runtime_backends import load_runtime_status
-from app.orchestrator.routers import projects, processing, segments, voice_mapping, render, ui, llm, characters, ocr_viewer, voice_presets
+from app.orchestrator.routers import (
+    projects,
+    processing,
+    segments,
+    voice_mapping,
+    render,
+    ui,
+    llm,
+    characters,
+    ocr_viewer,
+    voice_presets,
+    runtime_control,
+)
 from app.orchestrator.routers.voice_mapping import tts_router
 
 logger = get_logger("orchestrator")
@@ -44,6 +56,7 @@ app.include_router(tts_router)
 app.include_router(render.router)
 app.include_router(llm.router)
 app.include_router(ocr_viewer.router)
+app.include_router(runtime_control.router)
 app.include_router(ui.router)  # must be last (catch-all pages)
 
 

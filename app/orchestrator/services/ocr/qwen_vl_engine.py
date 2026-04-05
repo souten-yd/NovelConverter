@@ -8,6 +8,7 @@ Supports two modes:
 from __future__ import annotations
 
 import os
+import gc
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +21,56 @@ logger = get_logger("ocr.qwen_vl")
 _local_model = None
 _local_processor = None
 _local_model_id: str = ""
+_last_error: str = ""
+
+
+def get_qwen_vl_runtime_status() -> dict:
+    """Return a normalized runtime status snapshot for Qwen-VL."""
+    mode = "remote_api" if os.environ.get("LLM_API_URL", "") else "local"
+    loaded = _local_model is not None
+    return {
+        "engine": "qwen_vl",
+        "status": "running" if loaded else "stopped",
+        "loaded": loaded,
+        "current_model": _local_model_id if loaded else None,
+        "device": "cuda" if loaded else None,
+        "memory": {},
+        "idle_timer": {
+            "seconds": None,
+            "timeout_seconds": None,
+            "remaining_seconds": None,
+            "deadline_at": None,
+        },
+        "active_jobs": 0,
+        "lease_total": 0,
+        "pending_unload": False,
+        "mode": mode,
+        "last_error": _last_error or None,
+    }
+
+
+def release_qwen_vl_resources() -> dict:
+    """Release local Qwen-VL model/processor memory if loaded."""
+    global _local_model, _local_processor, _local_model_id
+    was_loaded = _local_model is not None or _local_processor is not None
+    _local_model = None
+    _local_processor = None
+    _local_model_id = ""
+    gc.collect()
+    try:
+        import torch  # type: ignore
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                torch.cuda.ipc_collect()
+    except Exception:
+        pass
+    return {
+        "requested": True,
+        "released": True,
+        "previously_loaded": was_loaded,
+    }
 
 
 class QwenVLEngine(OCREngine):
@@ -172,7 +223,7 @@ class QwenVLEngine(OCREngine):
         warnings: list[str],
     ) -> tuple[str, list[str]]:
         """Local Qwen2-VL inference via HuggingFace transformers."""
-        global _local_model, _local_processor, _local_model_id
+        global _local_model, _local_processor, _local_model_id, _last_error
 
         try:
             import torch
@@ -213,6 +264,7 @@ class QwenVLEngine(OCREngine):
                 _local_model_id = model_id
                 logger.info(f"Qwen-VL: model loaded: {model_id}")
         except Exception as exc:
+            _last_error = str(exc)
             warnings.append(f"Qwen-VL model load failed ({model_id}): {exc}")
             logger.error(f"Qwen-VL model load error: {exc}")
             return "", warnings
@@ -277,10 +329,12 @@ class QwenVLEngine(OCREngine):
                 warnings.append(f"Qwen-VL local returned empty result: {image_path.name}")
             else:
                 logger.info(f"Qwen-VL local ok: {image_path.name} → {len(output)} chars")
+            _last_error = ""
 
             wrapped = f"===== OCR: {image_path.name} =====\n{output}" if output else ""
             return wrapped, warnings
         except Exception as exc:
+            _last_error = str(exc)
             warnings.append(f"Qwen-VL local inference failed: {image_path.name}: {exc}")
             logger.error(f"Qwen-VL local inference error for {image_path.name}: {exc}")
             return "", warnings

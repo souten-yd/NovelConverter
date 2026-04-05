@@ -10,7 +10,23 @@ async function apiRequest(method, url, body = null) {
   const res = await fetch(url, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || res.statusText);
+    const detail = err?.detail ?? err;
+    const normalized = (detail && typeof detail === 'object')
+      ? {
+          reason: detail.reason || 'Request failed',
+          code: detail.code || `http_${res.status}`,
+          detail: detail.detail ?? detail,
+        }
+      : {
+          reason: String(detail || res.statusText || 'Request failed'),
+          code: `http_${res.status}`,
+          detail: String(detail || ''),
+        };
+    const e = new Error(`${normalized.reason} [${normalized.code}]`);
+    e.reason = normalized.reason;
+    e.code = normalized.code;
+    e.detail = normalized.detail;
+    throw e;
   }
   return res.json();
 }
