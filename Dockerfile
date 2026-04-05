@@ -53,6 +53,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TRANSFORMERS_CACHE=/workspace/hf_cache \
     # Skip PaddleX online model-source probe to reduce cold-start latency
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
+    OCR_VENV_PATH=/opt/venvs/ocr \
+    OCR_PYTHON=/opt/venvs/ocr/bin/python \
+    PADDLE_WHEEL_INDEX=cu126 \
+    BASE_IMAGE_CUDA=12.8 \
     LD_LIBRARY_PATH=/opt/llama-cpp/lib:${LD_LIBRARY_PATH}
 
 # ── System packages ───────────────────────────────────────────────────────────
@@ -128,18 +132,25 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTH
     && update-alternatives --install /usr/bin/python  python  /usr/bin/python${PYTHON_VERSION} 1 \
     && python3 -m pip install --upgrade pip
 
-# ── PaddleOCR GPU backend ─────────────────────────────────────────────────────
-# Pinned to 3.3.1 (tested with paddleocr==3.4.0, paddlex==3.4.3).
-# Prefer CUDA build on RunPod GPU image. If GPU wheel resolution fails,
-# fall back to CPU build so the container can still boot.
-RUN pip install --no-cache-dir "paddlepaddle-gpu==3.3.1" \
-      -f https://www.paddlepaddle.org.cn/packages/stable/cu128/ \
-    || pip install --no-cache-dir "paddlepaddle==3.3.1"
-
 # ── Python dependencies (single venv = system site-packages) ─────────────────
 WORKDIR ${APP_DIR}
 COPY requirements_docker.txt .
 RUN pip install --no-cache-dir -r requirements_docker.txt
+
+# ── PaddleOCR dedicated venv (GPU) ───────────────────────────────────────────
+# Base image is CUDA 12.8, but Paddle is installed from the official cu126
+# wheel index because cu128 is not a documented stable install target in the
+# current Paddle install guide.
+RUN python3 -m venv /opt/venvs/ocr \
+    && /opt/venvs/ocr/bin/python -m pip install --upgrade pip setuptools wheel \
+    && /opt/venvs/ocr/bin/python -m pip uninstall -y paddlepaddle paddlepaddle-gpu || true \
+    && /opt/venvs/ocr/bin/python -m pip cache purge || true \
+    && /opt/venvs/ocr/bin/python -m pip install --no-cache-dir \
+        paddlepaddle-gpu==3.2.2 \
+        -i https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
+    && /opt/venvs/ocr/bin/python -m pip install --no-cache-dir \
+        paddleocr==3.4.0 \
+        paddlex==3.4.3
 
 # ── NDLOCR-Lite (vendored upstream checkout at fixed commit) ─────────────────
 ARG NDLOCR_LITE_REPO=https://github.com/ndl-lab/ndlocr-lite.git
