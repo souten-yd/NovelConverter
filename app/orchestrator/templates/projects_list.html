@@ -23,6 +23,9 @@
       <a href="/projects/{{ p.id }}/segments" class="btn btn-sm btn-outline">セグメント</a>
       <a href="/projects/{{ p.id }}/voice_mapping" class="btn btn-sm btn-outline">音声設定</a>
       <a href="/projects/{{ p.id }}/render" class="btn btn-sm btn-outline">生成</a>
+      <button
+        class="btn btn-sm btn-danger"
+        onclick="openDeleteProjectModal('{{ p.id }}', '{{ p.name|e }}')">削除</button>
     </div>
   </div>
   {% endfor %}
@@ -50,10 +53,37 @@
     </div>
   </div>
 </div>
+
+<!-- Delete Modal (two-step confirmation) -->
+<div id="deleteProjectModal" class="modal hidden">
+  <div class="modal-overlay" onclick="closeDeleteProjectModal()"></div>
+  <div class="modal-box">
+    <h2>プロジェクト削除</h2>
+    <p style="font-size:0.92em;color:#b91c1c">
+      この操作は取り消せません。DBメタデータに加えて、OCR中間生成物・preview/render成果物・speaker mapping cache・temp files も削除されます。
+    </p>
+    <p id="deleteProjectNameLabel" style="font-size:0.9em;color:#334155;margin-top:8px"></p>
+
+    <label style="margin-top:12px;display:block">
+      <input type="checkbox" id="deleteConfirmStep1">
+      生成物を含むすべての関連ファイルが削除されることを理解しました
+    </label>
+    <label style="display:block;margin-top:10px">
+      <span style="font-size:0.85em;color:#64748b">確認のため「DELETE」と入力してください</span>
+      <input id="deleteConfirmText" type="text" class="input" placeholder="DELETE">
+    </label>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeDeleteProjectModal()">キャンセル</button>
+      <button id="deleteProjectExecBtn" class="btn btn-danger" onclick="deleteProjectFromList()" disabled>削除する</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+let deleteProjectTargetId = null;
+
 function showCreateModal() {
   document.getElementById('createModal').classList.remove('hidden');
   document.getElementById('newProjectName').focus();
@@ -80,5 +110,48 @@ async function createProject() {
 document.getElementById('newProjectName')?.addEventListener('keydown', e => {
   if (e.key === 'Enter') createProject();
 });
+
+function openDeleteProjectModal(projectId, projectName) {
+  deleteProjectTargetId = projectId;
+  document.getElementById('deleteProjectModal').classList.remove('hidden');
+  document.getElementById('deleteProjectNameLabel').textContent = `対象: ${projectName}`;
+  document.getElementById('deleteConfirmStep1').checked = false;
+  document.getElementById('deleteConfirmText').value = '';
+  _syncDeleteButtonState();
+  document.getElementById('deleteConfirmText').focus();
+}
+
+function closeDeleteProjectModal() {
+  deleteProjectTargetId = null;
+  document.getElementById('deleteProjectModal').classList.add('hidden');
+}
+
+function _syncDeleteButtonState() {
+  const checked = document.getElementById('deleteConfirmStep1').checked;
+  const typed = document.getElementById('deleteConfirmText').value.trim().toUpperCase() === 'DELETE';
+  document.getElementById('deleteProjectExecBtn').disabled = !(checked && typed);
+}
+
+document.getElementById('deleteConfirmStep1')?.addEventListener('change', _syncDeleteButtonState);
+document.getElementById('deleteConfirmText')?.addEventListener('input', _syncDeleteButtonState);
+
+async function deleteProjectFromList() {
+  if (!deleteProjectTargetId) return;
+  const btn = document.getElementById('deleteProjectExecBtn');
+  btn.disabled = true;
+  const res = await fetch(`/api/projects/${deleteProjectTargetId}`, { method: 'DELETE' });
+  if (res.ok) {
+    closeDeleteProjectModal();
+    location.reload();
+    return;
+  }
+  btn.disabled = false;
+  let msg = '削除に失敗しました';
+  try {
+    const data = await res.json();
+    if (data?.detail) msg = data.detail;
+  } catch (_) {}
+  alert(msg);
+}
 </script>
 {% endblock %}
