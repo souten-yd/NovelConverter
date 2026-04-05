@@ -137,12 +137,18 @@ class RubyAttachment:
     ruby_text: str
     base_bbox: list[float]
     ruby_bbox: list[float]
+    reading_source: str = "detected_ruby"
+    ruby_span: Optional[tuple[int, int]] = None
     confidence: float = 0.0
 
     def to_dict(self) -> dict:
         return {
             "base": self.base_text,
             "ruby": self.ruby_text,
+            "surface": self.base_text,
+            "reading": self.ruby_text,
+            "reading_source": self.reading_source,
+            "ruby_span": list(self.ruby_span) if self.ruby_span else None,
             "base_bbox": self.base_bbox,
             "ruby_bbox": self.ruby_bbox,
             "confidence": round(self.confidence, 3),
@@ -155,11 +161,23 @@ class LineSegment:
     seg_type: str  # "base" | "ruby"
     text: str
     parent: Optional[str] = None  # for ruby: the base text it annotates
+    surface: Optional[str] = None
+    reading: Optional[str] = None
+    reading_source: Optional[str] = None
+    ruby_span: Optional[tuple[int, int]] = None
 
     def to_dict(self) -> dict:
         d: dict[str, Any] = {"type": self.seg_type, "text": self.text}
         if self.parent:
             d["parent"] = self.parent
+        if self.surface is not None:
+            d["surface"] = self.surface
+        if self.reading is not None:
+            d["reading"] = self.reading
+        if self.reading_source is not None:
+            d["reading_source"] = self.reading_source
+        if self.ruby_span is not None:
+            d["ruby_span"] = list(self.ruby_span)
         return d
 
 
@@ -222,7 +240,7 @@ class OCRPageResult:
     ruby_candidates_count: int = 0
     # Text outputs
     plain_text: str = ""
-    ruby_text: str = ""       # e.g. "漢字(かんじ)"
+    ruby_text: str = ""       # machine-readable e.g. "[漢字|かんじ]"
     ruby_html: str = ""       # e.g. "<ruby>漢字<rt>かんじ</rt></ruby>"
     # Structured data
     tokens: list[OCRToken] = field(default_factory=list)

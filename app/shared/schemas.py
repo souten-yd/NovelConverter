@@ -35,6 +35,9 @@ class SegmentOut(BaseModel):
     order_index: int
     raw_text: str
     normalized_text: str
+    ruby_text: Optional[str] = None
+    ruby_metadata: List[Dict[str, Any]] = Field(default_factory=list)
+    tts_text: Optional[str] = None
     segment_type: str
     predicted_speaker: str
     confidence: float

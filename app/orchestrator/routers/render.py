@@ -17,6 +17,7 @@ from app.shared.logger import get_logger
 from app.shared.paths import get_data_dir
 from app.orchestrator.services.tts_dispatcher import synthesize
 from app.orchestrator.services.audio_merger import merge_wavs, try_convert_to_m4b, get_wav_duration
+from app.orchestrator.services.text_normalizer import prepare_tts_text
 
 logger = get_logger("router.render")
 router = APIRouter(prefix="/api/projects", tags=["render"])
@@ -88,12 +89,13 @@ def _render_background(project_id: str, job_id: str, skip_done: bool = True):
 
             speaker_name = seg.final_speaker or seg.predicted_speaker or "narrator"
             profile = sp_name_to_profile.get(speaker_name)
+            tts_text = (seg.tts_text or "").strip() or prepare_tts_text(seg.ruby_text or seg.normalized_text)
 
             out_path = output_dir / f"seg_{seg.order_index:05d}.wav"
 
             try:
                 result = synthesize(
-                    text=seg.normalized_text,
+                    text=tts_text,
                     worker_type=profile.worker_type if profile else "custom",
                     output_path=out_path,
                     language=profile.language if profile else "ja",
@@ -107,6 +109,7 @@ def _render_background(project_id: str, job_id: str, skip_done: bool = True):
                 if result.success and result.output_path:
                     seg.render_status = "done"
                     seg.output_audio_path = result.output_path
+                    seg.tts_text = tts_text
                     seg.error_message = None
                     done += 1
                 else:

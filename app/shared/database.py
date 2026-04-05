@@ -44,6 +44,9 @@ def _migrate_columns(eng) -> None:
         ("segments", "needs_review",      "INTEGER DEFAULT 0"),
         ("segments", "monologue_subtype", "TEXT"),
         ("segments", "rule_log",          "TEXT DEFAULT '[]'"),
+        ("segments", "ruby_text",         "TEXT"),
+        ("segments", "ruby_metadata",     "TEXT DEFAULT '[]'"),
+        ("segments", "tts_text",          "TEXT"),
         ("voice_profiles", "preset_id",   "TEXT"),
     ]
     with eng.connect() as conn:

@@ -73,6 +73,9 @@ class Segment(Base):
     needs_review = Column(Boolean, default=False)   # flagged for human review
     monologue_subtype = Column(String, nullable=True)  # "inner" | None
     rule_log = Column(JSON, default=list)           # [{"rule": str, "fired": bool, "detail": str}]
+    ruby_text = Column(Text, nullable=True)         # machine-readable ruby format e.g. [漢字|かんじ]
+    ruby_metadata = Column(JSON, default=list)      # [{"surface","reading","reading_source","ruby_span"}]
+    tts_text = Column(Text, nullable=True)          # reading-prioritized text for TTS
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
