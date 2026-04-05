@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # =============================================================================
 # NovelConverter – RunPod / NVIDIA GPU Docker Image
 # Base: Ubuntu 22.04 + CUDA 12.8 + cuDNN
@@ -179,21 +180,26 @@ RUN set -eux; \
     ls -la /opt/ndlocr-lite/src/config; \
     test -f /opt/ndlocr-lite/src/config/ndl.yaml; \
     test -f /opt/ndlocr-lite/src/config/NDLmoji.yaml
-RUN set -eux; \
-    python3 -m venv /opt/venvs/ndlocr; \
-    /opt/venvs/ndlocr/bin/python -m pip install --upgrade pip setuptools wheel; \
-    /opt/venvs/ndlocr/bin/python -m pip install --no-cache-dir -r /opt/ndlocr-lite/requirements.txt; \
-    if [ "${NDLOCR_DEVICE}" = "cuda" ]; then \
-      /opt/venvs/ndlocr/bin/python -m pip uninstall -y onnxruntime || true; \
-      /opt/venvs/ndlocr/bin/python -m pip install --no-cache-dir onnxruntime-gpu==1.23.2; \
-    fi; \
-    /opt/venvs/ndlocr/bin/python - <<'PY' \
-import onnxruntime \
-import yaml \
-import cv2 \
-import numpy \
-print("onnxruntime ok") \
+RUN <<'SH'
+set -eux
+
+python3 -m venv /opt/venvs/ndlocr
+/opt/venvs/ndlocr/bin/python -m pip install --upgrade pip setuptools wheel
+/opt/venvs/ndlocr/bin/python -m pip install --no-cache-dir -r /opt/ndlocr-lite/requirements.txt
+
+if [ "${NDLOCR_DEVICE}" = "cuda" ]; then
+  /opt/venvs/ndlocr/bin/python -m pip uninstall -y onnxruntime || true
+  /opt/venvs/ndlocr/bin/python -m pip install --no-cache-dir onnxruntime-gpu==1.23.2
+fi
+
+/opt/venvs/ndlocr/bin/python - <<'PY'
+import onnxruntime
+import yaml
+import cv2
+import numpy
+print("onnxruntime ok")
 PY
+SH
 
 # ── Application code ──────────────────────────────────────────────────────────
 COPY app/        ${APP_DIR}/app/
