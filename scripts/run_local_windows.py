@@ -34,7 +34,6 @@ def _build_env() -> dict:
     env["MODELS_ROOT"] = str(ROOT / "data" / "models")
     env["CACHE_ROOT"] = str(ROOT / "cache")
     env["HF_HOME"] = str(ROOT / "cache" / "huggingface")
-    env["NDLOCR_MODEL_DIR"] = str(ROOT / "data" / "models" / "ocr" / "ndlocr")
     env.setdefault("TTS_BASE_USE_REAL", "true")
     env.setdefault("TTS_CUSTOM_USE_REAL", "true")
     env.setdefault("TTS_DESIGN_USE_REAL", "true")
