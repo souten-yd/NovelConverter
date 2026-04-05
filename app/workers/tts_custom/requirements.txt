@@ -1,8 +1,9 @@
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 pydantic>=2.0.0
-# Real model dependencies (uncomment when using real model):
-# torch>=2.1.0
-# transformers>=4.40.0
-# soundfile>=0.12.1
-# numpy>=1.24.0
+torch>=2.3.0
+torchaudio>=2.3.0
+transformers>=4.44.0
+qwen-tts
+soundfile>=0.12.1
+numpy>=1.26.0

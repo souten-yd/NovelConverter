@@ -39,6 +39,15 @@ def get_synth():
     return _synth
 
 
+@app.on_event("startup")
+def startup_preflight():
+    synth = get_synth()
+    if USE_REAL_MODEL and not synth.is_loaded():
+        err = synth.get_load_error() if hasattr(synth, "get_load_error") else "unknown error"
+        logger.error("TTS Base preflight failed: %s", err)
+        raise RuntimeError(f"TTS Base preflight failed: {err}")
+
+
 @app.get("/health", response_model=WorkerHealth)
 def health():
     return WorkerHealth(
@@ -84,6 +93,22 @@ def model_status():
     except Exception:
         pass
     return result
+
+
+@app.get("/diagnostics")
+def diagnostics():
+    synth = get_synth()
+    status = synth.get_runtime_status() if hasattr(synth, "get_runtime_status") else {}
+    status.update(
+        {
+            "worker_id": WORKER_ID,
+            "worker_type": WORKER_TYPE,
+            "use_real_model": USE_REAL_MODEL,
+            "model_loaded": synth.is_loaded(),
+            "load_error": synth.get_load_error() if hasattr(synth, "get_load_error") else None,
+        }
+    )
+    return status
 
 
 @app.post("/synthesize", response_model=SynthesizeResponse)
