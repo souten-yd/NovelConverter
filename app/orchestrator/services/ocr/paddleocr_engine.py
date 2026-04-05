@@ -51,6 +51,9 @@ class PaddleOCREngine(OCREngine):
     _device: str = "gpu:0"
     _resolved_device: str = "gpu:0"
     _use_layout: bool = False
+    _smoke_test_passed: bool = False
+    _smoke_test_warning: str = ""
+    _last_error: Optional[str] = None
 
     @classmethod
     def configure(cls, device: str = "gpu:0", use_layout: bool = False) -> None:
@@ -66,6 +69,9 @@ class PaddleOCREngine(OCREngine):
             if cls._ocr_instance is not None:
                 cls._ocr_instance = None
                 cls._init_error = None
+                cls._smoke_test_passed = False
+                cls._smoke_test_warning = ""
+                cls._last_error = None
                 logger.info(f"PaddleOCR config changed: device={device} layout={use_layout}")
 
     @classmethod
@@ -165,6 +171,9 @@ class PaddleOCREngine(OCREngine):
             return
         if cls._init_error is not None:
             raise RuntimeError(cls._init_error)
+        cls._smoke_test_passed = False
+        cls._smoke_test_warning = ""
+        cls._last_error = None
 
         from paddleocr import PaddleOCR
 
@@ -177,6 +186,7 @@ class PaddleOCREngine(OCREngine):
                 f"Unsupported PaddleOCR major version: {version}. "
                 "This service requires PaddleOCR 3.x."
             )
+            cls._last_error = cls._init_error
             raise RuntimeError(cls._init_error)
 
         cls._resolved_device = cls._resolve_device(cls._device)
@@ -202,10 +212,12 @@ class PaddleOCREngine(OCREngine):
                     logger.info("PaddleOCR initialized without layout kwargs (compatibility fallback).")
                 except Exception as exc2:
                     cls._init_error = str(exc2)
+                    cls._last_error = cls._init_error
                     logger.error(f"PaddleOCR initialization failed (version={version}): {exc2}")
                     raise RuntimeError(cls._init_error) from exc2
             else:
                 cls._init_error = str(exc)
+                cls._last_error = cls._init_error
                 logger.error(f"PaddleOCR initialization failed (version={version}): {exc}")
                 raise RuntimeError(cls._init_error) from exc
 
@@ -213,10 +225,13 @@ class PaddleOCREngine(OCREngine):
         # Catches errors that only appear when predict() is called (e.g. the
         # "unexpected keyword argument 'cls'" raised inside PaddleX pipeline).
         try:
-            import numpy as np
-            dummy = np.full((32, 32, 3), 255, dtype=np.uint8)
-            instance.predict(dummy)
-            logger.info(f"PaddleOCR smoke test passed (version={version})")
+            passed, warn = cls._run_smoke_test(instance)
+            cls._smoke_test_passed = passed
+            cls._smoke_test_warning = warn
+            if passed:
+                logger.info(f"PaddleOCR smoke test passed (version={version})")
+            else:
+                logger.warning(f"PaddleOCR smoke test warning (version={version}): {warn}")
         except TypeError as exc:
             if _is_compat_error(exc):
                 _WarnOnce.warn(
@@ -225,24 +240,91 @@ class PaddleOCREngine(OCREngine):
                 )
                 try:
                     instance = PaddleOCR(**cls._build_init_kwargs(paddle_lang, force_no_layout=True))
-                    instance.predict(dummy)
-                    logger.info("PaddleOCR smoke test passed after layout disable.")
+                    passed, warn = cls._run_smoke_test(instance)
+                    cls._smoke_test_passed = passed
+                    cls._smoke_test_warning = warn
+                    if passed:
+                        logger.info("PaddleOCR smoke test passed after layout disable.")
+                    else:
+                        logger.warning(f"PaddleOCR smoke test warning after layout disable: {warn}")
                 except Exception as exc3:
                     cls._init_error = str(exc3)
+                    cls._last_error = cls._init_error
                     logger.error(f"PaddleOCR smoke test failed after retry: {exc3}")
                     raise RuntimeError(cls._init_error) from exc3
             else:
                 cls._init_error = str(exc)
+                cls._last_error = cls._init_error
                 logger.error(f"PaddleOCR smoke test unexpected TypeError: {exc}")
                 raise RuntimeError(cls._init_error) from exc
-        except Exception:
-            # Non-TypeError from a blank image (e.g. "no text regions detected")
-            # is non-fatal — the smoke test goal is specifically to catch TypeError.
-            logger.debug("PaddleOCR smoke test raised non-TypeError; treating as non-fatal.")
+        except Exception as exc:
+            cls._init_error = str(exc)
+            cls._last_error = cls._init_error
+            logger.error(f"PaddleOCR smoke test failed: {exc}")
+            raise RuntimeError(cls._init_error) from exc
 
         # Assign only after both constructor and smoke test succeed.
         cls._ocr_instance = instance
         logger.info(f"PaddleOCR ready (version={version})")
+
+    @staticmethod
+    def _run_smoke_test(instance: Any) -> tuple[bool, str]:
+        """Run minimum viable OCR on a synthetic image.
+
+        Returns:
+          (True, "") when at least one text region is recognized.
+          (False, warning) when OCR call succeeds but returns no text.
+        Raises:
+          Any exception from predict() for fatal runtime failures.
+        """
+        import numpy as np
+        from PIL import Image, ImageDraw
+
+        image = Image.new("RGB", (192, 64), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((8, 18), "TEST", fill="black")
+        arr = np.array(image)
+        normalized = PaddleOCREngine._normalize_predict_result(instance.predict(arr))
+        text_hits = [str(x.get("text", "")).strip() for x in normalized if str(x.get("text", "")).strip()]
+        if text_hits:
+            return True, ""
+        return False, "OCR call succeeded but no text was detected in smoke image"
+
+    @classmethod
+    def get_runtime_status(cls) -> dict:
+        """Detailed runtime state for startup log and status API."""
+        version = _get_paddleocr_version()
+        paddle_version = "unknown"
+        paddlex_version = "unknown"
+        cuda_compiled = False
+        device = "unknown"
+        try:
+            import paddle
+            paddle_version = getattr(paddle, "__version__", "unknown")
+            cuda_compiled = bool(getattr(paddle, "is_compiled_with_cuda", lambda: False)())
+            if hasattr(paddle, "device") and hasattr(paddle.device, "get_device"):
+                device = paddle.device.get_device()
+        except Exception:
+            pass
+        try:
+            import paddlex
+            paddlex_version = getattr(paddlex, "__version__", "unknown")
+        except Exception:
+            pass
+        return {
+            "paddleocr_version": version,
+            "paddlepaddle_version": paddle_version,
+            "paddlex_version": paddlex_version,
+            "cuda_compiled": cuda_compiled,
+            "device": device,
+            "available": cls._init_error is None,
+            "configured_device": cls._device,
+            "resolved_device": cls._resolved_device,
+            "initialized": cls._ocr_instance is not None,
+            "smoke_test_passed": cls._smoke_test_passed,
+            "smoke_test_warning": cls._smoke_test_warning,
+            "last_error": cls._last_error or cls._init_error,
+        }
 
     @staticmethod
     def _resolve_device(requested_device: str) -> str:

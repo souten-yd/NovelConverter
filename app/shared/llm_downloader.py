@@ -45,12 +45,17 @@ def ensure_llm_model() -> Path:
     dest = get_llm_model_path()
 
     if is_llm_ready():
-        logger.info(f"[llm_downloader] LLM model already present: {dest}")
+        logger.info(f"[llm_downloader] LLM model: already present, skipping download ({dest})")
         return dest
+
+    logger.info(
+        f"[llm_downloader] LLM model: "
+        f"{'incomplete, re-downloading' if dest.exists() else 'missing, downloading'} ({dest})"
+    )
 
     # Remove corrupt/partial file
     if dest.exists():
-        logger.warning(f"[llm_downloader] LLM file exists but is too small, removing: {dest}")
+        logger.warning(f"[llm_downloader] LLM file incomplete, removing: {dest}")
         dest.unlink()
 
     try:

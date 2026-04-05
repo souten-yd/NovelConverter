@@ -38,6 +38,7 @@ _DEFAULT_MODEL_DIR = "/workspace/ndlocr_models"
 
 # File extensions that indicate a downloaded model file
 _MODEL_EXTENSIONS = {".pth", ".pt", ".onnx", ".pdparams", ".bin", ".npz"}
+_AUX_EXTENSIONS = {".json", ".yaml", ".yml"}
 
 
 def _get_model_dir() -> Path:
@@ -85,33 +86,56 @@ def _check_cli_functional() -> tuple[bool, str]:
         return False, f"NDLOCR-Lite CLI 確認中にエラーが発生しました: {exc}"
 
 
-def _check_model_files() -> tuple[bool, str]:
+def _check_model_files() -> tuple[bool, str, dict]:
     """Check that model files exist in the configured model directory.
 
-    Returns (ok, error_message).
+    Returns (ok, error_message, details).
     """
     model_dir = _get_model_dir()
+    details = {
+        "model_dir_exists": model_dir.exists(),
+        "model_files_count": 0,
+        "aux_files_count": 0,
+        "status": "missing",
+    }
 
     if not model_dir.exists():
         return False, (
             f"モデルディレクトリが見つかりません: {model_dir}  "
             f"(環境変数 NDLOCR_MODEL_DIR={model_dir} に ndlocr モデルを配置してください。"
             "python3 scripts/download_ndlocr_models.py でダウンロード可能です)"
-        )
+        ), details
 
     model_files = [
         p for p in model_dir.rglob("*")
         if p.is_file() and p.suffix.lower() in _MODEL_EXTENSIONS
     ]
+    aux_files = [
+        p for p in model_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in _AUX_EXTENSIONS
+    ]
+    details["model_files_count"] = len(model_files)
+    details["aux_files_count"] = len(aux_files)
+
     if not model_files:
+        details["status"] = "missing"
         return False, (
             f"モデルファイルが見つかりません: {model_dir} にモデルが未配置です  "
             f"(対象拡張子: {', '.join(sorted(_MODEL_EXTENSIONS))})。"
             "手動ダウンロードが必要です: python3 scripts/download_ndlocr_models.py"
-        )
+        ), details
+
+    if not aux_files:
+        details["status"] = "incomplete"
+        return False, (
+            f"モデル補助ファイルが見つかりません: {model_dir}  "
+            f"(対象拡張子: {', '.join(sorted(_AUX_EXTENSIONS))})。"
+            "手動ダウンロードが必要です: python3 scripts/download_ndlocr_models.py"
+        ), details
 
     logger.debug(f"NDLOCR-Lite: {len(model_files)} model file(s) found in {model_dir}")
-    return True, ""
+    details["status"] = "ready"
+    return True, "", details
 
 
 def get_ndlocr_status() -> dict:
@@ -130,7 +154,7 @@ def get_ndlocr_status() -> dict:
     binary = _ndlocr_binary()
     installed = binary is not None
     cli_ok, cli_err = _check_cli_functional() if installed else (False, "ndlocr not found")
-    model_ok, model_err = _check_model_files()
+    model_ok, model_err, model_details = _check_model_files()
     model_dir = _get_model_dir()
 
     errors = []
@@ -153,6 +177,10 @@ def get_ndlocr_status() -> dict:
         "model_files_present": model_ok,
         "runtime_ready": runtime_ready,
         "model_path": str(model_dir),
+        "model_dir_status": model_details["status"],
+        "model_dir_exists": model_details["model_dir_exists"],
+        "model_files_count": model_details["model_files_count"],
+        "aux_files_count": model_details["aux_files_count"],
         "error_message": "  |  ".join(errors) if errors else "",
     }
 

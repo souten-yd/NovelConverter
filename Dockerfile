@@ -131,11 +131,11 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTH
     && python3 -m pip install --upgrade pip
 
 # ── PaddleOCR GPU backend ─────────────────────────────────────────────────────
-# Pinned to 3.3.1 (tested with paddleocr==3.4.0, paddlex==3.4.3, CUDA 12.8).
-# If ConvertPirAttribute2RuntimeAttribute errors appear at predict-time,
-# change "3.3.1" to "3.2.2" in both lines below and rebuild.
+# Pinned to 3.3.1 (tested with paddleocr==3.4.0, paddlex==3.4.3).
+# Prefer CUDA build on RunPod GPU image. If GPU wheel resolution fails,
+# fall back to CPU build so the container can still boot.
 RUN pip install --no-cache-dir "paddlepaddle-gpu==3.3.1" \
-      -f https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html \
+      -f https://www.paddlepaddle.org.cn/packages/stable/cu128/ \
     || pip install --no-cache-dir "paddlepaddle==3.3.1"
 
 # ── Python dependencies (single venv = system site-packages) ─────────────────
@@ -166,6 +166,7 @@ RUN mkdir -p /workspace/ndlocr_models
 
 # ── Application code ──────────────────────────────────────────────────────────
 COPY app/        ${APP_DIR}/app/
+COPY scripts/    ${APP_DIR}/scripts/
 COPY pyproject.toml ${APP_DIR}/
 COPY samples/    ${APP_DIR}/samples/
 

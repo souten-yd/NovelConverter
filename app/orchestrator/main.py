@@ -67,8 +67,23 @@ def _log_ocr_engine_status() -> None:
                 )
         # Extra detail for PaddleOCR version
         try:
-            from app.orchestrator.services.ocr.paddleocr_engine import _get_paddleocr_version
-            logger.info(f"PaddleOCR installed version: {_get_paddleocr_version()}")
+            from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
+            paddle_status = PaddleOCREngine.get_runtime_status()
+            logger.info(
+                "PaddleOCR status – "
+                f"available={paddle_status['available']} "
+                f"version={paddle_status['paddleocr_version']} "
+                f"paddle={paddle_status['paddlepaddle_version']} "
+                f"paddlex={paddle_status['paddlex_version']} "
+                f"cuda_compiled={paddle_status['cuda_compiled']} "
+                f"device={paddle_status['device']} "
+                f"resolved_device={paddle_status['resolved_device']} "
+                f"smoke_test_passed={paddle_status['smoke_test_passed']}"
+            )
+            if paddle_status["smoke_test_warning"]:
+                logger.warning(f"PaddleOCR smoke warning: {paddle_status['smoke_test_warning']}")
+            if paddle_status["last_error"]:
+                logger.warning(f"PaddleOCR last error: {paddle_status['last_error']}")
         except Exception:
             pass
         # Extra detail for NDLOCR-Lite
@@ -115,39 +130,8 @@ def ndlocr_lite_status():
 @app.get("/api/ocr/engines/paddleocr/status")
 def paddleocr_status():
     """Detailed runtime status for the PaddleOCR engine."""
-    from app.orchestrator.services.ocr.paddleocr_engine import (
-        _get_paddleocr_version,
-        PaddleOCREngine,
-    )
-    version = _get_paddleocr_version()
-    init_error = PaddleOCREngine._init_error
-
-    paddle_version = "unknown"
-    paddlex_version = "unknown"
-    cuda_available = False
-    try:
-        import paddle
-        paddle_version = getattr(paddle, "__version__", "unknown")
-        cuda_available = getattr(paddle, "is_compiled_with_cuda", lambda: False)()
-    except ImportError:
-        pass
-    try:
-        import paddlex
-        paddlex_version = getattr(paddlex, "__version__", "unknown")
-    except ImportError:
-        pass
-
-    return {
-        "paddleocr_version": version,
-        "paddlepaddle_version": paddle_version,
-        "paddlex_version": paddlex_version,
-        "cuda_available": cuda_available,
-        "configured_device": PaddleOCREngine._device,
-        "resolved_device": PaddleOCREngine._resolved_device,
-        "instance_ready": PaddleOCREngine._ocr_instance is not None,
-        "init_error": init_error,
-        "runtime_ready": init_error is None,
-    }
+    from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
+    return PaddleOCREngine.get_runtime_status()
 
 
 @app.get("/api/health/dependencies")
@@ -201,11 +185,21 @@ def full_status() -> Dict[str, Any]:
             workers[name] = {"status": "unreachable", "error": str(e)}
             all_ok = False
 
-    return {
+    result = {
         "orchestrator": {"status": "ok"},
         "workers": workers,
         "all_healthy": all_ok,
     }
+    try:
+        from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
+        from app.orchestrator.services.ocr.ndlocr_lite_engine import get_ndlocr_status
+        result["ocr"] = {
+            "paddleocr": PaddleOCREngine.get_runtime_status(),
+            "ndlocr_lite": get_ndlocr_status(),
+        }
+    except Exception as exc:
+        result["ocr"] = {"error": str(exc)}
+    return result
 
 
 @app.get("/api/system/models")
@@ -251,5 +245,16 @@ def system_models_status() -> Dict[str, Any]:
         except Exception as e:
             workers[name] = {"error": str(e)}
     result["tts_workers"] = workers
+
+    # OCR runtime summary (single place view)
+    try:
+        from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
+        from app.orchestrator.services.ocr.ndlocr_lite_engine import get_ndlocr_status
+        result["ocr"] = {
+            "paddleocr": PaddleOCREngine.get_runtime_status(),
+            "ndlocr_lite": get_ndlocr_status(),
+        }
+    except Exception as e:
+        result["ocr"] = {"error": str(e)}
 
     return result
