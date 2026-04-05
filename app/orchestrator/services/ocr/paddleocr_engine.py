@@ -87,6 +87,7 @@ class PaddleOCREngine(OCREngine):
     _smoke_test_warning: str = ""
     _last_error: Optional[str] = None
     _runtime_reason: str = ""
+    _predict_sample_logged: bool = False
 
     @classmethod
     def configure(cls, device: str = "gpu:0", use_layout: bool = False) -> None:
@@ -105,6 +106,7 @@ class PaddleOCREngine(OCREngine):
                 cls._smoke_test_passed = False
                 cls._smoke_test_warning = ""
                 cls._last_error = None
+                cls._predict_sample_logged = False
                 logger.info(f"PaddleOCR config changed: device={device} layout={use_layout}")
 
 
@@ -116,6 +118,7 @@ class PaddleOCREngine(OCREngine):
         cls._smoke_test_passed = False
         cls._smoke_test_warning = ""
         cls._last_error = None
+        cls._predict_sample_logged = False
         try:
             import paddle
 
@@ -148,8 +151,22 @@ class PaddleOCREngine(OCREngine):
             tuple(normalized_image.shape),
         )
         result = cls._ocr_instance.predict(normalized_image)
+        cls._log_predict_result_sample(result)
         normalized = cls._normalize_predict_result(result)
         return normalized
+
+    @classmethod
+    def _log_predict_result_sample(cls, result: Any) -> None:
+        if cls._predict_sample_logged:
+            return
+        cls._predict_sample_logged = True
+        try:
+            summarized = repr(result)
+            if len(summarized) > 1200:
+                summarized = f"{summarized[:1200]} ...<truncated>"
+            logger.info("PaddleOCR raw result sample: type=%s payload=%s", type(result).__name__, summarized)
+        except Exception as exc:
+            logger.warning("PaddleOCR raw result sample logging failed: type=%s err=%s", type(result).__name__, exc)
 
     def is_available(self) -> tuple[bool, str]:
         missing = []
@@ -465,24 +482,75 @@ class PaddleOCREngine(OCREngine):
             result = [result]
 
         normalized: list[dict[str, Any]] = []
-        for item in result:
+        for item_idx, item in enumerate(result):
             if hasattr(item, "res"):
                 item = item.res
             item = deep_to_py_scalars(item)
-            if not isinstance(item, dict):
-                continue
+            try:
+                if isinstance(item, dict):
+                    texts = item.get("rec_texts") or []
+                    scores = item.get("rec_scores") or []
+                    polys = item.get("rec_polys") or item.get("dt_polys") or []
+                    for idx, text in enumerate(texts):
+                        poly = polys[idx] if idx < len(polys) else None
+                        score = scores[idx] if idx < len(scores) else 0.0
+                        normalized.append({
+                            "text": str(text),
+                            "score": float(score) if score is not None else 0.0,
+                            "poly": deep_to_py_scalars(poly),
+                        })
+                    # Defensive fallback for non-list dict payloads
+                    if not texts and item.get("text"):
+                        normalized.append({
+                            "text": str(item.get("text", "")),
+                            "score": float(item.get("score", 0.0) or 0.0),
+                            "poly": deep_to_py_scalars(item.get("poly") or item.get("bbox")),
+                        })
+                    continue
 
-            texts = item.get("rec_texts") or []
-            scores = item.get("rec_scores") or []
-            polys = item.get("rec_polys") or item.get("dt_polys") or []
-            for idx, text in enumerate(texts):
-                poly = polys[idx] if idx < len(polys) else None
-                score = scores[idx] if idx < len(scores) else 0.0
-                normalized.append({
-                    "text": str(text),
-                    "score": float(score) if score is not None else 0.0,
-                    "poly": deep_to_py_scalars(poly),
-                })
+                if isinstance(item, (list, tuple)):
+                    for line_idx, line in enumerate(item):
+                        line = deep_to_py_scalars(line)
+                        if isinstance(line, dict):
+                            text = str(line.get("text", "")).strip()
+                            if text:
+                                normalized.append({
+                                    "text": text,
+                                    "score": float(line.get("score", 0.0) or 0.0),
+                                    "poly": deep_to_py_scalars(line.get("poly") or line.get("bbox")),
+                                })
+                            continue
+                        if not isinstance(line, (list, tuple)) or len(line) < 2:
+                            continue
+                        poly = line[0]
+                        text_info = line[1]
+                        text = ""
+                        score = 0.0
+                        if isinstance(text_info, (list, tuple)) and len(text_info) >= 1:
+                            text = str(text_info[0] or "")
+                            if len(text_info) >= 2 and text_info[1] is not None:
+                                score = float(text_info[1])
+                        elif isinstance(text_info, dict):
+                            text = str(text_info.get("text", "") or "")
+                            score = float(text_info.get("score", 0.0) or 0.0)
+                        elif isinstance(text_info, str):
+                            text = text_info
+                            if len(line) > 2 and line[2] is not None:
+                                score = float(line[2])
+                        if text.strip():
+                            normalized.append({
+                                "text": text.strip(),
+                                "score": score,
+                                "poly": deep_to_py_scalars(poly),
+                            })
+                    continue
+            except Exception as exc:
+                logger.warning(
+                    "PaddleOCR parse fallback error at result[%s]: type=%s err=%s",
+                    item_idx,
+                    type(item).__name__,
+                    exc,
+                )
 
         return normalized
 
@@ -543,5 +611,10 @@ class PaddleOCREngine(OCREngine):
         except Exception as exc:
             # Unexpected per-page error (not an init failure)
             warnings.append(f"PaddleOCR failed: {image_path.name}: {exc}")
-            logger.warning(f"PaddleOCR error for {image_path.name}: {exc}")
+            logger.exception(
+                "PaddleOCR error: relative_path=%s engine=%s err=%s",
+                image_path.name,
+                self.engine_id,
+                exc,
+            )
             return "", warnings

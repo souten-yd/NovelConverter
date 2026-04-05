@@ -44,6 +44,33 @@ def _requested_device() -> str:
     return "cuda" if _NDLOCR_DEVICE == "cuda" else "cpu"
 
 
+def _tail(text: str, limit: int = 600) -> str:
+    src = (text or "").strip()
+    if not src:
+        return ""
+    if len(src) <= limit:
+        return src
+    return src[-limit:]
+
+
+def _read_ndlocr_output_path(output_path: Path) -> list[str]:
+    texts: list[str] = []
+    if output_path.is_dir():
+        for pattern in ("*.txt", "*.json", "*.tsv", "*.csv"):
+            for out_file in sorted(output_path.rglob(pattern)):
+                try:
+                    texts.append(out_file.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+        return texts
+    if output_path.is_file():
+        try:
+            texts.append(output_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return texts
+
+
 @lru_cache(maxsize=1)
 def _detect_onnxruntime_backend(py: str) -> str:
     cmd = [
@@ -211,9 +238,9 @@ class NDLOCRLiteEngine(OCREngine):
         with tempfile.TemporaryDirectory(prefix="ndlocr_") as tmpdir:
             tmp = Path(tmpdir)
             input_dir = tmp / "input"
-            output_dir = tmp / "output"
+            output_path = tmp / "output"
             input_dir.mkdir()
-            output_dir.mkdir()
+            output_path.mkdir()
 
             dest = input_dir / image_path.name
             try:
@@ -242,12 +269,13 @@ class NDLOCRLiteEngine(OCREngine):
             cmd = [
                 py,
                 str(_OCR_SCRIPT),
-                "-i", str(input_dir),
-                "-o", str(output_dir),
+                "--sourceimg", str(dest),
+                "--output", str(output_path),
                 "--model_path", str(_MODEL_DIR),
                 "--device", status["device_request"],
             ]
-            logger.debug(f"NDLOCR-Lite cmd: {' '.join(cmd)}")
+            cmd_str = " ".join(cmd)
+            logger.info("NDLOCR-Lite cmd: %s", cmd_str)
 
             try:
                 result = subprocess.run(
@@ -264,34 +292,65 @@ class NDLOCRLiteEngine(OCREngine):
                 return "", warnings
             except Exception as exc:
                 warnings.append(f"NDLOCR-Lite subprocess error: {image_path.name}: {exc}")
-                logger.warning(f"NDLOCR-Lite error for {image_path.name}: {exc}")
+                logger.exception(
+                    "NDLOCR-Lite subprocess exception: file=%s engine=%s cmd=%s",
+                    image_path.name,
+                    self.engine_id,
+                    cmd_str,
+                )
                 return "", warnings
 
+            stdout_tail = _tail(result.stdout or "")
+            stderr_tail = _tail(result.stderr or "")
+            logger.info(
+                "NDLOCR-Lite rc=%s file=%s stdout_tail=%s stderr_tail=%s",
+                result.returncode,
+                image_path.name,
+                stdout_tail or "(empty)",
+                stderr_tail or "(empty)",
+            )
+
             if result.returncode != 0:
-                stderr_snippet = (result.stderr or "")[:300] or "(no stderr)"
                 missing_onnx = "No module named 'onnxruntime'" in (result.stderr or "")
+                bad_args = result.returncode == 2
                 warnings.append(
                     "NDLOCR-Lite unavailable: missing dependency onnxruntime"
                     if missing_onnx
                     else (
-                        f"NDLOCR-Lite failed (rc={result.returncode}): "
-                        f"{image_path.name}: {stderr_snippet}"
+                        f"NDLOCR-Lite argument error (rc=2): {image_path.name}"
+                        if bad_args
+                        else f"NDLOCR-Lite failed (rc={result.returncode}): {image_path.name}"
                     )
                 )
-                logger.warning(f"NDLOCR-Lite rc={result.returncode} for {image_path.name}")
+                logger.warning(
+                    "NDLOCR-Lite failed: relative_path=%s engine=%s cmd=%s rc=%s stdout_tail=%s stderr_tail=%s",
+                    image_path.name,
+                    self.engine_id,
+                    cmd_str,
+                    result.returncode,
+                    stdout_tail or "(empty)",
+                    stderr_tail or "(empty)",
+                )
                 return "", warnings
 
-            texts: list[str] = []
-            for txt_file in sorted(output_dir.rglob("*.txt")):
-                try:
-                    texts.append(txt_file.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
+            texts = _read_ndlocr_output_path(output_path)
 
             if result.stdout and result.stdout.strip():
                 texts.append(result.stdout.strip())
 
             combined = "\n".join(t for t in texts if t).strip()
+
+            if not texts and not combined:
+                warnings.append(f"NDLOCR-Lite output missing: {image_path.name}")
+                logger.warning(
+                    "NDLOCR-Lite output missing: relative_path=%s engine=%s output_path=%s cmd=%s stdout_tail=%s stderr_tail=%s",
+                    image_path.name,
+                    self.engine_id,
+                    output_path,
+                    cmd_str,
+                    stdout_tail or "(empty)",
+                    stderr_tail or "(empty)",
+                )
 
         if not combined:
             warnings.append(f"NDLOCR-Lite returned empty result: {image_path.name}")

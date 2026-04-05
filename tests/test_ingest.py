@@ -1,4 +1,5 @@
 import io
+import json
 import zipfile
 from pathlib import Path
 
@@ -72,3 +73,49 @@ def test_path_traversal_prevented(tmp_path: Path):
     assert any("unsafe archive member path" in w for w in summary.warnings)
     content = (tmp_path / "project" / summary.normalized_filename).read_text(encoding="utf-8")
     assert "safe" in content
+
+
+def test_manifest_totals_count_only_ok_files(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        ingest,
+        "extract_images_parallel",
+        lambda _paths, **kwargs: (
+            [
+                (tmp_path / "temp" / "extracted" / "ok.png", "===== OCR: ok.png =====\n成功", []),
+                (tmp_path / "temp" / "extracted" / "ng.png", "", ["NDLOCR-Lite failed (rc=2): ng.png"]),
+            ],
+            ["NDLOCR-Lite failed (rc=2): ng.png"],
+        ),
+    )
+
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as zf:
+        zf.writestr("ok.png", b"ok")
+        zf.writestr("ng.png", b"ng")
+
+    upload = DummyUpload("bundle.zip", payload.getvalue())
+    ingest.ingest_uploaded_file(upload, tmp_path / "project", tmp_path / "temp", ocr_engine="ndlocr_lite")
+    manifest = json.loads((tmp_path / "project" / "ingest_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["totals"]["processed"] == 1
+    assert manifest["totals"]["chars"] == 2
+
+
+def test_manifest_totals_zero_when_all_ocr_failed(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        ingest,
+        "extract_images_parallel",
+        lambda _paths, **kwargs: (
+            [(tmp_path / "temp" / "extracted" / "only.png", "", ["tuple index out of range"])],
+            ["tuple index out of range"],
+        ),
+    )
+
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as zf:
+        zf.writestr("only.png", b"img")
+
+    upload = DummyUpload("bundle.zip", payload.getvalue())
+    ingest.ingest_uploaded_file(upload, tmp_path / "project", tmp_path / "temp", ocr_engine="paddleocr")
+    manifest = json.loads((tmp_path / "project" / "ingest_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["totals"]["processed"] == 0
+    assert manifest["totals"]["chars"] == 0
