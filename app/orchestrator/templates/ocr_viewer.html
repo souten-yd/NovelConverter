@@ -28,34 +28,29 @@
     </select>
   </div>
   <div style="margin-left:auto;display:flex;gap:8px">
-    <button class="btn btn-primary" onclick="runPipeline()">OCRパイプライン実行</button>
+    <button id="openAdvancedBtn" class="btn btn-outline" onclick="openAdvancedSettings()">詳細設定</button>
+    <button id="rerunCurrentBtn" class="btn btn-primary" onclick="rerunCurrentPage()">この設定で再OCR</button>
+    <button id="runAllBtn" class="btn btn-outline" onclick="runPipelineForAll()">全ページ再OCR</button>
     <button class="btn btn-outline" onclick="loadPages()">更新</button>
   </div>
 </div>
 
-<!-- Pipeline config (collapsible) -->
-<details style="margin-bottom:16px">
-  <summary style="cursor:pointer;font-weight:600;font-size:0.9em;color:#4f6ef7">パイプライン設定</summary>
-  <div style="padding:12px;background:#f1f5f9;border-radius:0 0 8px 8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:4px">
+<!-- Advanced settings panel -->
+<div id="advancedPanelBackdrop" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.35);z-index:50" onclick="closeAdvancedSettings()"></div>
+<div id="advancedPanel" style="display:none;position:fixed;right:20px;top:70px;width:min(620px,calc(100vw - 40px));max-height:80vh;overflow:auto;background:#fff;border:1px solid #cbd5e1;border-radius:10px;box-shadow:0 10px 28px rgba(15,23,42,.25);z-index:60;padding:16px">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+    <h3 style="margin:0;font-size:1.05rem">詳細設定</h3>
+    <button class="btn btn-outline" onclick="closeAdvancedSettings()">閉じる</button>
+  </div>
+  <div style="padding:12px;background:#f8fafc;border-radius:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px">
     <div>
-      <label class="config-label">デフォルトエンジン</label>
-      <select id="cfgEngine" class="input">
+      <label class="config-label">OCRエンジン</label>
+      <select id="cfgEngine" class="input" onchange="toggleEngineOptions()">
         <option value="ndlocr_lite">NDLOCR-Lite</option>
         <option value="paddle_fast">PaddleOCR (高速)</option>
         <option value="paddle_layout">PaddleOCR (レイアウト)</option>
+        <option value="fallback">既存エンジン互換 (Fallback)</option>
       </select>
-    </div>
-    <div>
-      <label class="config-label">PaddleOCR デバイス</label>
-      <input id="cfgDevice" class="input" value="gpu:0">
-    </div>
-    <div>
-      <label class="config-label">PaddleOCR ワーカー数</label>
-      <input id="cfgPaddleWorkers" class="input" type="number" value="2" min="1" max="8">
-    </div>
-    <div>
-      <label class="config-label">NDLOCR ワーカー数</label>
-      <input id="cfgNdlocrWorkers" class="input" type="number" value="4" min="1" max="16">
     </div>
     <div>
       <label class="config-label">ルビ検出</label>
@@ -72,7 +67,29 @@
       </select>
     </div>
   </div>
-</details>
+
+  <div id="paddleOptions" style="margin-top:12px;padding:12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px">
+    <div style="font-size:0.84em;font-weight:700;color:#1d4ed8;margin-bottom:8px">PaddleOCR 詳細</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px">
+      <div>
+        <label class="config-label">デバイス</label>
+        <input id="cfgDevice" class="input" value="gpu:0">
+      </div>
+      <div>
+        <label class="config-label">ワーカー数</label>
+        <input id="cfgPaddleWorkers" class="input" type="number" value="2" min="1" max="8">
+      </div>
+    </div>
+  </div>
+
+  <div id="ndlocrOptions" style="margin-top:12px;padding:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px">
+    <div style="font-size:0.84em;font-weight:700;color:#166534;margin-bottom:8px">NDLOCR-Lite 詳細</div>
+    <div>
+      <label class="config-label">ワーカー数</label>
+      <input id="cfgNdlocrWorkers" class="input" type="number" value="4" min="1" max="16">
+    </div>
+  </div>
+</div>
 
 <!-- Progress bar (hidden initially) -->
 <div id="pipelineProgress" style="display:none;margin-bottom:16px;padding:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px">
@@ -138,9 +155,61 @@
 const projectId = '{{ project.id }}';
 let allPages = [];
 let currentPageIndex = -1;
+let reocrEnabled = true;
+let reocrReason = '';
+let pollingTimer = null;
 
 // Load pages on init
-loadPages();
+initViewer();
+
+async function initViewer() {
+  await Promise.all([loadCapabilities(), loadPipelineConfig()]);
+  toggleEngineOptions();
+  await loadPages();
+}
+
+async function loadCapabilities() {
+  try {
+    const res = await fetch(`/api/projects/${projectId}/ocr/capabilities`);
+    if (!res.ok) return;
+    const data = await res.json();
+    reocrEnabled = !!data.reocr_enabled;
+    reocrReason = data.reason || '';
+    const ids = ['openAdvancedBtn', 'rerunCurrentBtn', 'runAllBtn'];
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (reocrEnabled) {
+        el.style.display = '';
+        el.disabled = false;
+      } else {
+        el.style.display = 'none';
+      }
+    });
+    if (!reocrEnabled) {
+      const msg = document.getElementById('pageSummary');
+      msg.innerHTML = `<span style="color:#64748b">再OCRは無効です: ${escHtml(reocrReason || '対象外入力')}</span>`;
+    }
+  } catch (e) {
+    console.warn('loadCapabilities', e);
+  }
+}
+
+async function loadPipelineConfig() {
+  try {
+    const res = await fetch(`/api/projects/${projectId}/ocr/pipeline_config`);
+    if (!res.ok) return;
+    const cfg = await res.json();
+    document.getElementById('cfgEngine').value = cfg.default_engine || 'ndlocr_lite';
+    document.getElementById('cfgDevice').value = cfg.paddle_device || 'gpu:0';
+    document.getElementById('cfgPaddleWorkers').value = cfg.paddle_max_workers || 2;
+    document.getElementById('cfgNdlocrWorkers').value = cfg.ndlocr_max_workers || 4;
+    document.getElementById('cfgRuby').value = String(!!cfg.enable_ruby_detection);
+    document.getElementById('cfgCache').value = String(!!cfg.enable_cache);
+  } catch (e) {
+    console.warn('loadPipelineConfig', e);
+  }
+}
 
 async function loadPages() {
   const filter = document.getElementById('filterMode').value;
@@ -166,7 +235,8 @@ function renderSummary(data) {
   const errorCount = allPages.filter(p => p.status === 'error').length;
   el.innerHTML = `合計 <b>${data.total_pages}</b> ページ` +
     (rubyCount > 0 ? ` | ルビ検出: <b style="color:#92400e">${rubyCount}</b>` : '') +
-    (errorCount > 0 ? ` | エラー: <b style="color:#dc2626">${errorCount}</b>` : '');
+    (errorCount > 0 ? ` | エラー: <b style="color:#dc2626">${errorCount}</b>` : '') +
+    (!reocrEnabled ? ` | <span style="color:#64748b">再OCR無効: ${escHtml(reocrReason || '対象外')}</span>` : '');
 }
 
 function renderPageNav() {
@@ -281,12 +351,26 @@ function onModeChange() {
 }
 
 // Pipeline execution
-async function runPipeline() {
-  const progressEl = document.getElementById('pipelineProgress');
-  progressEl.style.display = 'block';
-  _setPipelineStage('初期化中...', 0);
+function openAdvancedSettings() {
+  document.getElementById('advancedPanelBackdrop').style.display = 'block';
+  document.getElementById('advancedPanel').style.display = 'block';
+}
 
-  const config = {
+function closeAdvancedSettings() {
+  document.getElementById('advancedPanelBackdrop').style.display = 'none';
+  document.getElementById('advancedPanel').style.display = 'none';
+}
+
+function toggleEngineOptions() {
+  const engine = document.getElementById('cfgEngine').value;
+  const isPaddle = engine.startsWith('paddle');
+  const isNdl = engine === 'ndlocr_lite';
+  document.getElementById('paddleOptions').style.display = isPaddle ? 'block' : 'none';
+  document.getElementById('ndlocrOptions').style.display = isNdl ? 'block' : 'none';
+}
+
+function buildPipelineConfig() {
+  return {
     default_engine: document.getElementById('cfgEngine').value,
     paddle_device: document.getElementById('cfgDevice').value,
     paddle_max_workers: parseInt(document.getElementById('cfgPaddleWorkers').value) || 2,
@@ -297,12 +381,21 @@ async function runPipeline() {
     paddle_lang: 'japan',
     ruby_confidence_threshold: 0.5,
   };
+}
+
+async function runPipeline(pageIndices) {
+  if (!reocrEnabled) return;
+  const progressEl = document.getElementById('pipelineProgress');
+  progressEl.style.display = 'block';
+  _setPipelineStage('初期化中...', 0);
+
+  const config = buildPipelineConfig();
 
   try {
     const res = await fetch(`/api/projects/${projectId}/ocr/run_pipeline`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config, force: false }),
+      body: JSON.stringify({ config, force: false, page_indices: pageIndices || null }),
     });
     if (!res.ok) {
       const e = await res.json().catch(() => ({}));
@@ -316,18 +409,35 @@ async function runPipeline() {
   }
 }
 
+function rerunCurrentPage() {
+  if (currentPageIndex < 0) {
+    alert('再OCR対象ページが選択されていません');
+    return;
+  }
+  runPipeline([currentPageIndex]);
+}
+
+function runPipelineForAll() {
+  runPipeline(null);
+}
+
 function _pollPipelineJob(jobId) {
-  const interval = setInterval(async () => {
+  if (pollingTimer) {
+    clearInterval(pollingTimer);
+    pollingTimer = null;
+  }
+  pollingTimer = setInterval(async () => {
     try {
       const res = await fetch(`/api/projects/${projectId}/jobs/${jobId}`);
-      if (!res.ok) { clearInterval(interval); return; }
+      if (!res.ok) { clearInterval(pollingTimer); pollingTimer = null; return; }
       const job = await res.json();
       if (job.status === 'running') {
         let label = job.stage_label || job.stage || '処理中';
         if (job.current_count && job.total_count) label += ` (${job.current_count}/${job.total_count})`;
         _setPipelineStage(label, job.progress_pct || 0);
       } else if (job.status === 'completed') {
-        clearInterval(interval);
+        clearInterval(pollingTimer);
+        pollingTimer = null;
         const rd = job.result_data || {};
         _setPipelineStage(`完了: ${rd.total_pages || '?'}ページ (${rd.elapsed_seconds || '?'}秒)`, 100);
         setTimeout(() => {
@@ -335,7 +445,8 @@ function _pollPipelineJob(jobId) {
           loadPages();
         }, 1500);
       } else if (job.status === 'failed') {
-        clearInterval(interval);
+        clearInterval(pollingTimer);
+        pollingTimer = null;
         _setPipelineStage('失敗: ' + (job.error_message || '不明'), 0, true);
       }
     } catch(e) { console.warn('[pollPipeline]', e); }

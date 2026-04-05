@@ -51,6 +51,7 @@ def run_pipeline(
     config: Optional[PipelineConfig] = None,
     job_id: Optional[str] = None,
     progress_cb: Optional[Callable[[str, int, int, int], None]] = None,
+    page_index_overrides: Optional[list[int]] = None,
 ) -> PipelineResult:
     """Execute the full OCR pipeline on an input source.
 
@@ -63,6 +64,7 @@ def run_pipeline(
         config: Pipeline configuration.
         job_id: Unique job identifier (auto-generated if None).
         progress_cb: Optional callback(stage, current, total, pct).
+        page_index_overrides: Optional page index mapping for subset re-runs.
 
     Returns:
         ``PipelineResult`` with all pages sorted by page_index.
@@ -169,6 +171,17 @@ def run_pipeline(
     _cb("postprocessing", 0, total_pages, 85)
     all_results = postprocess(all_results, decisions, config)
     _cb("postprocessing", total_pages, total_pages, 95)
+
+    if page_index_overrides is not None:
+        if len(page_index_overrides) != len(all_results):
+            logger.warning(
+                "page_index_overrides length mismatch: overrides=%d results=%d",
+                len(page_index_overrides), len(all_results),
+            )
+        for i, page in enumerate(all_results):
+            if i < len(page_index_overrides):
+                page.page_index = page_index_overrides[i]
+        all_results.sort(key=lambda p: p.page_index)
 
     # Compute stats
     engine_stats = compute_engine_stats(all_results)
