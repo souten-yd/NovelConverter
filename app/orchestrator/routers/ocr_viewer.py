@@ -9,7 +9,6 @@ Provides:
 """
 from __future__ import annotations
 
-import json
 import os
 import threading
 import uuid
@@ -23,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.shared.database import get_db, SessionLocal
 from app.shared.logger import get_logger
-from app.shared.models import OcrPage, ProcessingJob, Project
+from app.shared.models import OcrPage, OcrPageVersion, ProcessingJob, Project
 
 logger = get_logger("router.ocr_viewer")
 router = APIRouter(prefix="/api/projects", tags=["ocr_viewer"])
@@ -48,6 +47,11 @@ class PipelineConfigRequest(BaseModel):
 class RunPipelineRequest(BaseModel):
     config: Optional[PipelineConfigRequest] = None
     force: bool = False  # re-run even if cached results exist
+    page_indices: Optional[list[int]] = None
+
+
+class PipelineConfigResponse(PipelineConfigRequest):
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +63,90 @@ def _get_project_or_404(project_id: str, db: Session) -> Project:
     if not p:
         raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
     return p
+
+
+def _collect_project_images(project_dir: Path) -> list[Path]:
+    from app.orchestrator.services.ingest import IMAGE_EXTENSIONS
+    from app.orchestrator.services.ocr.input_normalizer import _natural_sort_key
+
+    image_paths: list[Path] = []
+    temp_dir = project_dir / "temp_ingest"
+    extracted_dir = temp_dir / "extracted"
+
+    for search_dir in [extracted_dir, temp_dir, project_dir]:
+        if search_dir.exists():
+            for p in search_dir.rglob("*"):
+                if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
+                    image_paths.append(p)
+            if image_paths:
+                break
+    return sorted(image_paths, key=_natural_sort_key)
+
+
+def _is_reocr_available(project: Project) -> tuple[bool, str]:
+    if not project.raw_text_path:
+        return False, "テキストデータがありません"
+    uploaded = (project.uploaded_filename or "").lower()
+    if uploaded.endswith(".epub") or uploaded.endswith(".txt"):
+        return False, "EPUB/TXTはOCR再実行対象外です"
+
+    project_dir = Path(project.raw_text_path).parent
+    images = _collect_project_images(project_dir)
+    if not images:
+        return False, "画像ページが見つかりません"
+    return True, ""
+
+
+def _snapshot_old_pages(
+    db: Session,
+    project_id: str,
+    page_indices: Optional[list[int]],
+    created_by_job_id: str,
+) -> str:
+    q = db.query(OcrPage).filter(OcrPage.project_id == project_id)
+    if page_indices is not None:
+        q = q.filter(OcrPage.page_index.in_(page_indices))
+    pages = q.order_by(OcrPage.page_index).all()
+    version_group_id = str(uuid.uuid4())
+    if not pages:
+        return version_group_id
+
+    for p in pages:
+        snap = {
+            "page_index": p.page_index,
+            "source_filename": p.source_filename,
+            "ocr_engine": p.ocr_engine,
+            "confidence": p.confidence,
+            "char_count": p.char_count,
+            "low_confidence": p.low_confidence,
+            "warnings": p.warnings or [],
+            "elapsed_ms": p.elapsed_ms,
+            "ruby_detected": p.ruby_detected,
+            "ruby_confidence": p.ruby_confidence,
+            "ruby_mode": p.ruby_mode,
+            "ruby_candidates_count": p.ruby_candidates_count,
+            "plain_text": p.plain_text,
+            "ruby_text": p.ruby_text,
+            "ruby_html": p.ruby_html,
+            "layout_complexity": p.layout_complexity,
+            "ruby_attachments": p.ruby_attachments or [],
+            "structured_lines": p.structured_lines or [],
+            "image_path": p.image_path,
+            "status": p.status,
+            "error_message": p.error_message,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+        }
+        db.add(
+            OcrPageVersion(
+                project_id=project_id,
+                page_index=p.page_index,
+                version_group_id=version_group_id,
+                created_by_job_id=created_by_job_id,
+                snapshot=snap,
+            )
+        )
+    db.flush()
+    return version_group_id
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +188,34 @@ def list_ocr_pages(
             for p in pages
         ],
     }
+
+
+@router.get("/{project_id}/ocr/capabilities")
+def get_ocr_capabilities(project_id: str, db: Session = Depends(get_db)):
+    project = _get_project_or_404(project_id, db)
+    enabled, reason = _is_reocr_available(project)
+    return {
+        "project_id": project_id,
+        "reocr_enabled": enabled,
+        "reason": reason,
+        "uploaded_filename": project.uploaded_filename,
+    }
+
+
+@router.get("/{project_id}/ocr/pipeline_config", response_model=PipelineConfigResponse)
+def get_pipeline_config(project_id: str, db: Session = Depends(get_db)):
+    _get_project_or_404(project_id, db)
+    return PipelineConfigResponse()
+
+
+@router.post("/{project_id}/ocr/pipeline_config", response_model=PipelineConfigResponse)
+def validate_pipeline_config(
+    project_id: str,
+    body: PipelineConfigRequest,
+    db: Session = Depends(get_db),
+):
+    _get_project_or_404(project_id, db)
+    return body
 
 
 @router.get("/{project_id}/ocr/pages/{page_index}")
@@ -153,6 +269,9 @@ def run_ocr_pipeline(
     Returns job_id for progress tracking.
     """
     project = _get_project_or_404(project_id, db)
+    reocr_enabled, reason = _is_reocr_available(project)
+    if not reocr_enabled:
+        raise HTTPException(status_code=400, detail=reason)
 
     if not project.raw_text_path:
         raise HTTPException(status_code=400, detail="テキストがまだアップロードされていません")
@@ -186,6 +305,10 @@ def run_ocr_pipeline(
         config.enable_cache = body.config.enable_cache
 
     force = body.force if body else False
+    target_page_indices = (
+        sorted(set(i for i in (body.page_indices or []) if isinstance(i, int) and i >= 0))
+        if body and body.page_indices is not None else None
+    )
 
     # Find image files from the project's ingest data
     project_dir = Path(project.raw_text_path).parent
@@ -193,7 +316,7 @@ def run_ocr_pipeline(
     def _bg_run():
         bg_db = SessionLocal()
         try:
-            _run_pipeline_bg(bg_db, project_id, job_id, project_dir, config, force)
+            _run_pipeline_bg(bg_db, project_id, job_id, project_dir, config, force, target_page_indices)
         except Exception as exc:
             logger.exception(f"OCR pipeline failed: project={project_id}")
             try:
@@ -218,6 +341,7 @@ def run_ocr_pipeline(
         "project_id": project_id,
         "job_id": job_id,
         "status": "running",
+        "page_indices": target_page_indices,
     }
 
 
@@ -228,27 +352,22 @@ def _run_pipeline_bg(
     project_dir: Path,
     config,
     force: bool,
+    page_indices: Optional[list[int]] = None,
 ):
     """Background task: run the OCR pipeline and save results to DB."""
     import time
     from app.orchestrator.services.ocr.pipeline import run_pipeline
-    from app.orchestrator.services.ingest import IMAGE_EXTENSIONS
 
     start = time.time()
 
     # Collect image files from project
-    image_paths: list[Path] = []
-    temp_dir = project_dir / "temp_ingest"
-    extracted_dir = temp_dir / "extracted"
-
-    # Check multiple locations for images
-    for search_dir in [extracted_dir, temp_dir, project_dir]:
-        if search_dir.exists():
-            for p in search_dir.rglob("*"):
-                if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
-                    image_paths.append(p)
-            if image_paths:
-                break
+    all_image_paths = _collect_project_images(project_dir)
+    indexed_paths = list(enumerate(all_image_paths))
+    if page_indices is not None:
+        selected = set(page_indices)
+        indexed_paths = [(idx, p) for idx, p in indexed_paths if idx in selected]
+    image_paths = [p for _, p in indexed_paths]
+    page_index_overrides = [original_idx for original_idx, _ in indexed_paths]
 
     if not image_paths:
         _update_job(db, job_id, "failed", "失敗", "画像ファイルが見つかりません")
@@ -275,13 +394,18 @@ def _run_pipeline_bg(
         config=config,
         job_id=f"ocr-{project_id[:8]}",
         progress_cb=_cb,
+        page_index_overrides=page_index_overrides if page_indices is not None else None,
     )
 
     # Save results to DB
     _update_job_progress(db, job_id, "saving", "結果保存中", 95, 0, total_pages)
+    version_group_id = _snapshot_old_pages(db, project_id, page_indices, job_id)
 
-    # Clear old OCR pages
-    db.query(OcrPage).filter(OcrPage.project_id == project_id).delete()
+    # Clear old OCR pages (all or targeted only)
+    old_q = db.query(OcrPage).filter(OcrPage.project_id == project_id)
+    if page_indices is not None:
+        old_q = old_q.filter(OcrPage.page_index.in_(page_indices))
+    old_q.delete(synchronize_session=False)
 
     for page in result.pages:
         ocr_page = OcrPage(
@@ -323,6 +447,8 @@ def _run_pipeline_bg(
             "engine_stats": result.engine_stats,
             "elapsed_seconds": elapsed,
             "ruby_pages": sum(1 for p in result.pages if p.ruby_detected),
+            "target_page_indices": page_indices or [],
+            "version_group_id": version_group_id,
         }
 
     db.commit()

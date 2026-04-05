@@ -46,6 +46,7 @@ class Project(Base):
     character_master = relationship("CharacterMaster", back_populates="project", cascade="all, delete-orphan")
     normalization_logs = relationship("NormalizationLog", back_populates="project", cascade="all, delete-orphan")
     ocr_pages = relationship("OcrPage", back_populates="project", cascade="all, delete-orphan")
+    ocr_page_versions = relationship("OcrPageVersion", back_populates="project", cascade="all, delete-orphan")
     review_logs = relationship("ReviewLog", back_populates="project", cascade="all, delete-orphan")
 
 
@@ -282,6 +283,21 @@ class OcrPage(Base):
     created_at = Column(DateTime, default=func.now())
 
     project = relationship("Project", back_populates="ocr_pages")
+
+
+class OcrPageVersion(Base):
+    """Version snapshot of OCR page results before re-run/overwrite."""
+    __tablename__ = "ocr_page_versions"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    project_id = Column(String, ForeignKey("projects.id"), nullable=False)
+    page_index = Column(Integer, nullable=False)
+    version_group_id = Column(String, nullable=False, index=True)
+    created_by_job_id = Column(String, nullable=True)
+    snapshot = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=func.now())
+
+    project = relationship("Project", back_populates="ocr_page_versions")
 
 
 class ReviewLog(Base):
