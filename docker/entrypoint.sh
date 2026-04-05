@@ -349,5 +349,7 @@ if [[ $# -gt 0 ]]; then
 fi
 
 # ── Start supervisord ─────────────────────────────────────────────────────────
+export SUPERVISOR_SOCKET="${SUPERVISOR_SOCKET:-/var/run/supervisor.sock}"
+echo "[entrypoint] Supervisor socket: ${SUPERVISOR_SOCKET}"
 echo "[entrypoint] Starting supervisord..."
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/novelconverter.conf

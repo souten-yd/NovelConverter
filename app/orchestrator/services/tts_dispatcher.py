@@ -10,6 +10,7 @@ import requests
 
 from app.shared.logger import get_logger
 from app.shared.schemas import SynthesizeRequest, SynthesizeResponse
+from app.orchestrator.services.resource_manager import acquire_lease, release_lease
 
 logger = get_logger("tts_dispatcher")
 
@@ -71,25 +72,35 @@ def synthesize(
     url = get_worker_url(worker_type)
     last_error: str = ""
 
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            resp = requests.post(
-                f"{url}/synthesize",
-                json=req.model_dump(),
-                timeout=120,
-            )
-            resp.raise_for_status()
-            result = SynthesizeResponse(**resp.json())
-            if result.success:
-                logger.info(f"Synthesized segment → {output_path} via {worker_type}")
-                return result
-            last_error = result.error or "unknown error"
-            logger.warning(f"Worker returned failure (attempt {attempt}): {last_error}")
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(f"Synthesis attempt {attempt} failed: {e}")
+    lease_reason = f"tts_synthesize_{worker_type}"
+    acquire_lease(
+        f"tts_{worker_type}",
+        reason=lease_reason,
+        model_id=worker_type,
+        options={"worker_type": worker_type},
+    )
+    try:
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                resp = requests.post(
+                    f"{url}/synthesize",
+                    json=req.model_dump(),
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                result = SynthesizeResponse(**resp.json())
+                if result.success:
+                    logger.info(f"Synthesized segment → {output_path} via {worker_type}")
+                    return result
+                last_error = result.error or "unknown error"
+                logger.warning(f"Worker returned failure (attempt {attempt}): {last_error}")
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"Synthesis attempt {attempt} failed: {e}")
 
-        if attempt < MAX_RETRIES:
-            time.sleep(RETRY_DELAY * attempt)
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY * attempt)
+    finally:
+        release_lease(f"tts_{worker_type}", reason=lease_reason)
 
     return SynthesizeResponse(success=False, error=last_error)
