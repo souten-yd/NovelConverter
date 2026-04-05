@@ -1,24 +1,15 @@
 """NDLOCR-Lite engine adapter for Japanese document OCR.
 
-NDLOCR-Lite is the National Diet Library's Japanese OCR engine.
-It is strong on vertical Japanese text and historical documents.
-
-Installation:
-  pip install git+https://github.com/ndl-lab/ndlocr-lite.git
-
-Model storage:
-  Models are NOT included in the pip package and must be downloaded separately.
-  By default they are stored at NDLOCR_MODEL_DIR (env) or /workspace/ndlocr_models.
-  The entrypoint.sh startup script will attempt to download them automatically.
+This adapter uses a vendored upstream checkout at /opt/ndlocr-lite that is
+prepared during Docker image build (fixed commit checkout).
 
 Availability criteria (all must pass):
-  1. NDLOCR-Lite CLI binary is in PATH (ndlocr-lite preferred, ndlocr fallback)
-  2. CLI --help runs without error (CLI is functional)
-  3. NDLOCR_MODEL_DIR exists and contains at least one model file
+  1. /opt/ndlocr-lite/src/ocr.py exists
+  2. /opt/ndlocr-lite/src/model/*.onnx has exactly 4 files
+  3. /opt/ndlocr-lite/src/config/ndl.yaml and NDLmoji.yaml exist
 """
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import tempfile
@@ -30,164 +21,92 @@ from app.shared.logger import get_logger
 
 logger = get_logger("ocr.ndlocr_lite")
 
-# ---------------------------------------------------------------------------
-# Module-level helpers
-# ---------------------------------------------------------------------------
-
-_DEFAULT_MODEL_DIR = str((Path(__file__).resolve().parents[4] / "data" / "models" / "ocr" / "ndlocr"))
-
-# File extensions that indicate a downloaded model file
-_MODEL_EXTENSIONS = {".pth", ".pt", ".onnx", ".pdparams", ".bin", ".npz"}
-_AUX_EXTENSIONS = {".json", ".yaml", ".yml"}
+_NDLOCR_ROOT = Path("/opt/ndlocr-lite")
+_OCR_SCRIPT = _NDLOCR_ROOT / "src" / "ocr.py"
+_MODEL_DIR = _NDLOCR_ROOT / "src" / "model"
+_CONFIG_DIR = _NDLOCR_ROOT / "src" / "config"
+_REQUIRED_CONFIGS = ("ndl.yaml", "NDLmoji.yaml")
 
 
-def _get_model_dir() -> Path:
-    """Return model directory (env NDLOCR_MODEL_DIR or default)."""
-    return Path(os.environ.get("NDLOCR_MODEL_DIR", _DEFAULT_MODEL_DIR))
+def _python_binary() -> Optional[str]:
+    return shutil.which("python3") or shutil.which("python")
 
 
-def _ndlocr_binary() -> Optional[str]:
-    """Return NDLOCR-Lite CLI path (ndlocr-lite preferred, ndlocr fallback)."""
-    return shutil.which("ndlocr-lite") or shutil.which("ndlocr")
-
-
-def _check_cli_functional() -> tuple[bool, str]:
-    """Verify NDLOCR-Lite CLI is installed and responds to --help.
-
-    Returns (ok, error_message).
-    """
-    binary = _ndlocr_binary()
-    if binary is None:
-        return False, (
-            "NDLOCR-Lite CLI が見つかりません。"
-            "pip install git+https://github.com/ndl-lab/ndlocr-lite.git"
-        )
-
-    try:
-        proc = subprocess.run(
-            [binary, "--help"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=15,
-        )
-        # --help commonly exits 0 or 1; both are acceptable here.
-        if proc.returncode not in (0, 1):
-            stderr = (proc.stderr or "").strip()[:300]
-            return False, (
-                f"NDLOCR-Lite --help が異常終了しました (rc={proc.returncode}): {stderr}"
-            )
+def _check_ocr_script() -> tuple[bool, str]:
+    if _OCR_SCRIPT.is_file():
         return True, ""
-    except FileNotFoundError:
-        return False, f"NDLOCR-Lite バイナリが見つかりません: {binary}"
-    except subprocess.TimeoutExpired:
-        return False, "NDLOCR-Lite --help がタイムアウトしました (CLI が壊れている可能性があります)"
-    except Exception as exc:
-        return False, f"NDLOCR-Lite CLI 確認中にエラーが発生しました: {exc}"
+    return False, f"NDLOCR-Lite OCR script not found: {_OCR_SCRIPT}"
 
 
-def _check_model_files() -> tuple[bool, str, dict]:
-    """Check that model files exist in the configured model directory.
-
-    Returns (ok, error_message, details).
-    """
-    model_dir = _get_model_dir()
-    details = {
-        "model_dir_exists": model_dir.exists(),
-        "model_files_count": 0,
-        "aux_files_count": 0,
-        "status": "missing",
+def _check_model_and_config_files() -> tuple[bool, str, dict]:
+    model_files = sorted(_MODEL_DIR.glob("*.onnx")) if _MODEL_DIR.is_dir() else []
+    configs_present = {
+        name: (_CONFIG_DIR / name).is_file()
+        for name in _REQUIRED_CONFIGS
     }
 
-    if not model_dir.exists():
-        return False, (
-            f"モデルディレクトリが見つかりません: {model_dir}  "
-            f"(環境変数 NDLOCR_MODEL_DIR={model_dir} に ndlocr モデルを配置してください。"
-            "python scripts/download_ndlocr_models.py でダウンロード可能です)"
-        ), details
+    details = {
+        "model_dir_exists": _MODEL_DIR.is_dir(),
+        "model_files_count": len(model_files),
+        "config_dir_exists": _CONFIG_DIR.is_dir(),
+        "configs_present": configs_present,
+        "status": "ready",
+    }
 
-    model_files = [
-        p for p in model_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in _MODEL_EXTENSIONS
-    ]
-    aux_files = [
-        p for p in model_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in _AUX_EXTENSIONS
-    ]
-    details["model_files_count"] = len(model_files)
-    details["aux_files_count"] = len(aux_files)
-
-    if not model_files:
-        details["status"] = "missing"
-        return False, (
-            f"モデルファイルが見つかりません: {model_dir} にモデルが未配置です  "
-            f"(対象拡張子: {', '.join(sorted(_MODEL_EXTENSIONS))})。"
-            "手動ダウンロードが必要です: python scripts/download_ndlocr_models.py"
-        ), details
-
-    if not aux_files:
+    if len(model_files) != 4:
         details["status"] = "incomplete"
-        return False, (
-            f"モデル補助ファイルが見つかりません: {model_dir}  "
-            f"(対象拡張子: {', '.join(sorted(_AUX_EXTENSIONS))})。"
-            "手動ダウンロードが必要です: python scripts/download_ndlocr_models.py"
-        ), details
+        return (
+            False,
+            f"NDLOCR-Lite model files mismatch: expected 4 onnx, found {len(model_files)} ({_MODEL_DIR})",
+            details,
+        )
 
-    logger.debug(f"NDLOCR-Lite: {len(model_files)} model file(s) found in {model_dir}")
-    details["status"] = "ready"
+    missing_configs = [name for name, ok in configs_present.items() if not ok]
+    if missing_configs:
+        details["status"] = "incomplete"
+        return (
+            False,
+            f"NDLOCR-Lite config files missing in {_CONFIG_DIR}: {', '.join(missing_configs)}",
+            details,
+        )
+
     return True, "", details
 
 
 def get_ndlocr_status() -> dict:
-    """Return a detailed status dict for the NDLOCR-Lite engine.
-
-    Used by health-check endpoints and startup diagnostics.
-    Keys:
-      installed        – ndlocr binary present in PATH
-      importable       – (reserved; ndlocr is CLI-based, not imported)
-      cli_functional   – ndlocr --help succeeds
-      model_files_present – model files found in model_dir
-      runtime_ready    – all of the above are True
-      model_path       – configured model directory path
-      error_message    – human-readable summary of what is missing
-    """
-    binary = _ndlocr_binary()
-    installed = binary is not None
-    cli_ok, cli_err = _check_cli_functional() if installed else (False, "ndlocr not found")
-    model_ok, model_err, model_details = _check_model_files()
-    model_dir = _get_model_dir()
+    """Return a detailed status dict for the NDLOCR-Lite engine."""
+    py = _python_binary()
+    script_ok, script_err = _check_ocr_script()
+    assets_ok, assets_err, asset_details = _check_model_and_config_files()
 
     errors = []
-    if not installed:
-        errors.append(
-            "NDLOCR-Lite CLI が PATH にありません "
-            "(pip install git+https://github.com/ndl-lab/ndlocr-lite.git)"
-        )
-    elif not cli_ok:
-        errors.append(f"CLI 動作確認失敗: {cli_err}")
-    if not model_ok:
-        errors.append(f"モデル未配置: {model_err}")
+    if py is None:
+        errors.append("python3/python command not found")
+    if not script_ok:
+        errors.append(script_err)
+    if not assets_ok:
+        errors.append(assets_err)
 
-    runtime_ready = installed and cli_ok and model_ok
+    runtime_ready = py is not None and script_ok and assets_ok
 
     return {
-        "installed": installed,
-        "importable": installed,  # CLI-based; same as installed
-        "cli_functional": cli_ok,
-        "model_files_present": model_ok,
+        "installed": script_ok,
+        "importable": script_ok,
+        "cli_functional": script_ok,
+        "model_files_present": assets_ok,
         "runtime_ready": runtime_ready,
-        "model_path": str(model_dir),
-        "model_dir_status": model_details["status"],
-        "model_dir_exists": model_details["model_dir_exists"],
-        "model_files_count": model_details["model_files_count"],
-        "aux_files_count": model_details["aux_files_count"],
+        "model_path": str(_MODEL_DIR),
+        "model_dir_status": asset_details["status"],
+        "model_dir_exists": asset_details["model_dir_exists"],
+        "model_files_count": asset_details["model_files_count"],
+        "aux_files_count": sum(asset_details["configs_present"].values()),
+        "ocr_script_path": str(_OCR_SCRIPT),
+        "ocr_script_exists": script_ok,
+        "config_dir_exists": asset_details["config_dir_exists"],
+        "configs_present": asset_details["configs_present"],
         "error_message": "  |  ".join(errors) if errors else "",
     }
 
-
-# ---------------------------------------------------------------------------
-# Engine adapter
-# ---------------------------------------------------------------------------
 
 class NDLOCRLiteEngine(OCREngine):
     engine_id = "ndlocr_lite"
@@ -195,13 +114,6 @@ class NDLOCRLiteEngine(OCREngine):
     description = "国立国会図書館開発の日本語文書向けOCR。縦書き・歴史的文書に強い。"
 
     def is_available(self) -> tuple[bool, str]:
-        """Return (available, error_message).
-
-        Availability requires:
-          1. ndlocr CLI in PATH
-          2. ndlocr --help succeeds
-          3. Model files present in NDLOCR_MODEL_DIR
-        """
         status = get_ndlocr_status()
         if status["runtime_ready"]:
             return True, ""
@@ -216,10 +128,8 @@ class NDLOCRLiteEngine(OCREngine):
             "python_packages": ["Pillow>=10.0.0"],
             "system_packages": [],
             "notes": (
-                "NDLOCR-Lite は GitHub からインストール: "
-                "pip install git+https://github.com/ndl-lab/ndlocr-lite.git  "
-                "モデルは手動で NDLOCR_MODEL_DIR へ配置してください。"
-                "ダウンロード: python scripts/download_ndlocr_models.py"
+                "NDLOCR-Lite は Docker build 時に /opt/ndlocr-lite へ固定コミットで配置され、"
+                "実行時は /opt/ndlocr-lite/src/ocr.py を直接実行します。"
             ),
             "status": status,
         }
@@ -232,18 +142,16 @@ class NDLOCRLiteEngine(OCREngine):
     ) -> tuple[str, list[str]]:
         warnings: list[str] = []
 
-        # Pre-flight check before touching the file
         status = get_ndlocr_status()
         if not status["runtime_ready"]:
-            warnings.append(
-                f"NDLOCR-Lite は利用不可: {status['error_message']}"
-            )
+            warnings.append(f"NDLOCR-Lite は利用不可: {status['error_message']}")
             return "", warnings
 
-        binary = _ndlocr_binary()
-        model_dir = _get_model_dir()
+        py = _python_binary()
+        if py is None:
+            warnings.append("python3/python command not found")
+            return "", warnings
 
-        # ndlocr v2 operates on a directory of images, not a single file.
         with tempfile.TemporaryDirectory(prefix="ndlocr_") as tmpdir:
             tmp = Path(tmpdir)
             input_dir = tmp / "input"
@@ -255,11 +163,12 @@ class NDLOCRLiteEngine(OCREngine):
             shutil.copy2(image_path, dest)
 
             cmd = [
-                binary,
+                py,
+                str(_OCR_SCRIPT),
                 "-i", str(input_dir),
                 "-o", str(output_dir),
                 "--use_gpu", "False",
-                "--model_path", str(model_dir),
+                "--model_path", str(_MODEL_DIR),
             ]
             logger.debug(f"NDLOCR-Lite cmd: {' '.join(cmd)}")
 
@@ -270,6 +179,7 @@ class NDLOCRLiteEngine(OCREngine):
                     text=True,
                     encoding="utf-8",
                     timeout=180,
+                    cwd=str(_NDLOCR_ROOT),
                 )
             except subprocess.TimeoutExpired:
                 warnings.append(f"NDLOCR-Lite timeout: {image_path.name}")
@@ -286,9 +196,7 @@ class NDLOCRLiteEngine(OCREngine):
                     f"NDLOCR-Lite failed (rc={result.returncode}): "
                     f"{image_path.name}: {stderr_snippet}"
                 )
-                logger.warning(
-                    f"NDLOCR-Lite rc={result.returncode} for {image_path.name}"
-                )
+                logger.warning(f"NDLOCR-Lite rc={result.returncode} for {image_path.name}")
                 return "", warnings
 
             texts: list[str] = []

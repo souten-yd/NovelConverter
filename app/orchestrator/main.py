@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 import requests
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -107,7 +107,19 @@ def _log_ocr_engine_status() -> None:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "orchestrator"}
+    from app.orchestrator.services.ocr.ndlocr_lite_engine import get_ndlocr_status
+
+    ndl = get_ndlocr_status()
+    if not ndl.get("runtime_ready", False):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "degraded",
+                "service": "orchestrator",
+                "ndlocr_lite": ndl,
+            },
+        )
+    return {"status": "ok", "service": "orchestrator", "ndlocr_lite": ndl}
 
 
 @app.get("/api/ocr/engines")

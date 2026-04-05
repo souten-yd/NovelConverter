@@ -53,9 +53,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TRANSFORMERS_CACHE=/workspace/hf_cache \
     # Skip PaddleX online model-source probe to reduce cold-start latency
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
-    LD_LIBRARY_PATH=/opt/llama-cpp/lib:${LD_LIBRARY_PATH} \
-    # NDLOCR-Lite model directory (persistent RunPod storage)
-    NDLOCR_MODEL_DIR=/workspace/ndlocr_models
+    LD_LIBRARY_PATH=/opt/llama-cpp/lib:${LD_LIBRARY_PATH}
 
 # ── System packages ───────────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -143,26 +141,28 @@ WORKDIR ${APP_DIR}
 COPY requirements_docker.txt .
 RUN pip install --no-cache-dir -r requirements_docker.txt
 
-# ── NDLOCR-Lite (NDL Japanese OCR – installed from GitHub) ───────────────────
-# The pip package installs the NDLOCR-Lite CLI; model weights are NOT bundled.
-# Models must be manually downloaded to NDLOCR_MODEL_DIR (/workspace/ndlocr_models).
-# Use: python3 scripts/download_ndlocr_models.py
-# The directory is on a RunPod persistent volume so models survive Pod restarts.
-RUN pip install --no-cache-dir \
-      git+https://github.com/ndl-lab/ndlocr-lite.git \
-    && echo "[Dockerfile] NDLOCR-Lite installed" \
-    || echo "WARNING: NDLOCR-Lite install failed – engine will report unavailable at runtime"
-
-# Build-time smoke test (non-fatal): verify import + CLI entrypoint.
-RUN python3 -c "import ocr; print('ndlocr-lite import ok')" \
-    && ndlocr-lite --help >/dev/null 2>&1 \
-    && echo "[Dockerfile] NDLOCR-Lite smoke test passed" \
-    || echo "WARNING: NDLOCR-Lite smoke test failed"
-
-# Create placeholder model dir at image build time.
-# The actual model files are downloaded to /workspace/ndlocr_models at runtime
-# (entrypoint.sh) because /workspace is a RunPod-mounted persistent volume.
-RUN mkdir -p /workspace/ndlocr_models
+# ── NDLOCR-Lite (vendored upstream checkout at fixed commit) ─────────────────
+ARG NDLOCR_LITE_REPO=https://github.com/ndl-lab/ndlocr-lite.git
+ARG NDLOCR_LITE_COMMIT=master
+RUN set -eux; \
+    commit="${NDLOCR_LITE_COMMIT:-master}"; \
+    if [ -z "${commit}" ]; then commit=master; fi; \
+    echo "NDLOCR_LITE_REPO=${NDLOCR_LITE_REPO}"; \
+    echo "NDLOCR_LITE_COMMIT_RESOLVED=${commit}"; \
+    printf '%s' "${commit}" > /tmp/ndlocr_commit.txt
+RUN set -eux; \
+    commit="$(cat /tmp/ndlocr_commit.txt)"; \
+    rm -rf /opt/ndlocr-lite; \
+    git clone --filter=blob:none "${NDLOCR_LITE_REPO}" /opt/ndlocr-lite; \
+    git -C /opt/ndlocr-lite checkout "${commit}"; \
+    git -C /opt/ndlocr-lite rev-parse HEAD
+RUN set -eux; \
+    test -f /opt/ndlocr-lite/src/ocr.py; \
+    find /opt/ndlocr-lite/src/model -maxdepth 1 -type f -name '*.onnx' -print; \
+    test "$(find /opt/ndlocr-lite/src/model -maxdepth 1 -type f -name '*.onnx' | wc -l)" -eq 4; \
+    ls -la /opt/ndlocr-lite/src/config; \
+    test -f /opt/ndlocr-lite/src/config/ndl.yaml; \
+    test -f /opt/ndlocr-lite/src/config/NDLmoji.yaml
 
 # ── Application code ──────────────────────────────────────────────────────────
 COPY app/        ${APP_DIR}/app/
@@ -188,7 +188,6 @@ RUN mkdir -p \
     /workspace/data/temp \
     /workspace/data/references \
     /workspace/hf_cache \
-    /workspace/ndlocr_models \
     /var/log/novelconverter
 
 # ── Health check (orchestrator) ───────────────────────────────────────────────
