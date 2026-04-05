@@ -41,8 +41,9 @@ Thumbs.db
 # Docs (not needed at runtime)
 docs/
 
-# Local run scripts (not needed in container)
-scripts/
+# Scripts are required in image (e.g. NDLOCR model downloader)
+!scripts/
+!scripts/**
 
 # Tests
 tests/
