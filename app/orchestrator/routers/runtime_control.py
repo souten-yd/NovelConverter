@@ -78,7 +78,14 @@ def _worker_status_urls() -> Dict[str, str]:
 
 
 @router.get("/status")
-def unified_runtime_status(db: Session = Depends(get_db), project_id: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+def unified_runtime_status(
+    db: Session = Depends(get_db),
+    project_id: Optional[str] = Query(default=None),
+    lite: bool = Query(
+        default=False,
+        description="Skip heavyweight runtime probes (recommended for project page initial load).",
+    ),
+) -> Dict[str, Any]:
     """Unified runtime status for OCR/TTS/LLM/VLM in a normalized format."""
     lifecycle = get_resource_status()
 
@@ -99,108 +106,117 @@ def unified_runtime_status(db: Session = Depends(get_db), project_id: Optional[s
     # OCR backends (paddle + ndlocr + qwen-vl)
     ocr_status: Dict[str, Any] = {}
     paddle_lifecycle = lifecycle.get("paddleocr", {})
-    try:
-        from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
+    if lite:
+        ocr_status["paddleocr"] = _engine_view(paddle_lifecycle, fallback_engine="paddleocr")
+        ocr_status["paddleocr"].update({"available": None, "resolved_device": None, "paddleocr_version": None})
+        ocr_status["ndlocr_lite"] = _engine_view(lifecycle.get("ndlocr_lite", {}), fallback_engine="ndlocr_lite")
+        ocr_status["qwen_vl"] = _engine_view(lifecycle.get("qwen_vl", {}), fallback_engine="qwen_vl")
+    else:
+        try:
+            from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
 
-        paddle_rt = PaddleOCREngine.get_runtime_status()
-        ocr_status["paddleocr"] = {
-            **_engine_view(paddle_lifecycle, fallback_engine="paddleocr"),
-            "available": paddle_rt.get("available"),
-            "resolved_device": paddle_rt.get("resolved_device"),
-            "paddleocr_version": paddle_rt.get("paddleocr_version"),
-            "last_error": paddle_rt.get("last_error") or paddle_lifecycle.get("last_error") or None,
-        }
-    except Exception as exc:
-        ocr_status["paddleocr"] = {
-            **_engine_view(paddle_lifecycle, fallback_engine="paddleocr"),
-            "available": False,
-            "last_error": str(exc),
-        }
+            paddle_rt = PaddleOCREngine.get_runtime_status()
+            ocr_status["paddleocr"] = {
+                **_engine_view(paddle_lifecycle, fallback_engine="paddleocr"),
+                "available": paddle_rt.get("available"),
+                "resolved_device": paddle_rt.get("resolved_device"),
+                "paddleocr_version": paddle_rt.get("paddleocr_version"),
+                "last_error": paddle_rt.get("last_error") or paddle_lifecycle.get("last_error") or None,
+            }
+        except Exception as exc:
+            ocr_status["paddleocr"] = {
+                **_engine_view(paddle_lifecycle, fallback_engine="paddleocr"),
+                "available": False,
+                "last_error": str(exc),
+            }
 
-    try:
-        from app.orchestrator.services.ocr.ndlocr_lite_engine import get_ndlocr_status
+        try:
+            from app.orchestrator.services.ocr.ndlocr_lite_engine import get_ndlocr_status
 
-        ndl = get_ndlocr_status()
-        ocr_status["ndlocr_lite"] = {
-            "engine": "ndlocr_lite",
-            "status": "running" if ndl.get("runtime_ready") else "error",
-            "loaded": bool(ndl.get("runtime_ready")),
-            "current_model": ndl.get("model_path") if ndl.get("model_files_present") else None,
-            "device": "cpu",
-            "memory": {},
-            "idle_timer": {"seconds": None, "timeout_seconds": None, "remaining_seconds": None, "deadline_at": None},
-            "active_jobs": 0,
-            "lease_total": 0,
-            "pending_unload": False,
-            "installed": ndl.get("installed"),
-            "cli_functional": ndl.get("cli_functional"),
-            "last_error": ndl.get("error_message") or None,
-        }
-    except Exception as exc:
-        ocr_status["ndlocr_lite"] = {
-            "engine": "ndlocr_lite",
-            "status": "error",
-            "loaded": False,
-            "current_model": None,
-            "device": "cpu",
-            "memory": {},
-            "idle_timer": {"seconds": None, "timeout_seconds": None, "remaining_seconds": None, "deadline_at": None},
-            "active_jobs": 0,
-            "lease_total": 0,
-            "pending_unload": False,
-            "last_error": str(exc),
-        }
+            ndl = get_ndlocr_status()
+            ocr_status["ndlocr_lite"] = {
+                "engine": "ndlocr_lite",
+                "status": "running" if ndl.get("runtime_ready") else "error",
+                "loaded": bool(ndl.get("runtime_ready")),
+                "current_model": ndl.get("model_path") if ndl.get("model_files_present") else None,
+                "device": "cpu",
+                "memory": {},
+                "idle_timer": {"seconds": None, "timeout_seconds": None, "remaining_seconds": None, "deadline_at": None},
+                "active_jobs": 0,
+                "lease_total": 0,
+                "pending_unload": False,
+                "installed": ndl.get("installed"),
+                "cli_functional": ndl.get("cli_functional"),
+                "last_error": ndl.get("error_message") or None,
+            }
+        except Exception as exc:
+            ocr_status["ndlocr_lite"] = {
+                "engine": "ndlocr_lite",
+                "status": "error",
+                "loaded": False,
+                "current_model": None,
+                "device": "cpu",
+                "memory": {},
+                "idle_timer": {"seconds": None, "timeout_seconds": None, "remaining_seconds": None, "deadline_at": None},
+                "active_jobs": 0,
+                "lease_total": 0,
+                "pending_unload": False,
+                "last_error": str(exc),
+            }
 
-    try:
-        from app.orchestrator.services.ocr.qwen_vl_engine import get_qwen_vl_runtime_status
+        try:
+            from app.orchestrator.services.ocr.qwen_vl_engine import get_qwen_vl_runtime_status
 
-        ocr_status["qwen_vl"] = get_qwen_vl_runtime_status()
-    except Exception as exc:
-        ocr_status["qwen_vl"] = {
-            "engine": "qwen_vl",
-            "status": "error",
-            "loaded": False,
-            "current_model": None,
-            "device": None,
-            "memory": {},
-            "idle_timer": {"seconds": None, "timeout_seconds": None, "remaining_seconds": None, "deadline_at": None},
-            "active_jobs": 0,
-            "lease_total": 0,
-            "pending_unload": False,
-            "mode": "unknown",
-            "last_error": str(exc),
-        }
+            ocr_status["qwen_vl"] = get_qwen_vl_runtime_status()
+        except Exception as exc:
+            ocr_status["qwen_vl"] = {
+                "engine": "qwen_vl",
+                "status": "error",
+                "loaded": False,
+                "current_model": None,
+                "device": None,
+                "memory": {},
+                "idle_timer": {"seconds": None, "timeout_seconds": None, "remaining_seconds": None, "deadline_at": None},
+                "active_jobs": 0,
+                "lease_total": 0,
+                "pending_unload": False,
+                "mode": "unknown",
+                "last_error": str(exc),
+            }
 
     # TTS workers + lifecycle states
     tts_status: Dict[str, Any] = {}
     for worker_type, base_url in _worker_status_urls().items():
         lifecycle_key = f"tts_{worker_type}"
         st = _engine_view(lifecycle.get(lifecycle_key, {}), fallback_engine=lifecycle_key)
-        try:
-            health = _fetch_json(f"{base_url}/health")
-            model_status = _fetch_json(f"{base_url}/model_status")
-            st.update(
-                {
-                    "alive": True,
-                    "url": base_url,
-                    "worker_id": health.get("worker_id"),
-                    "health": health,
-                    "model_status": model_status,
-                    "current_model": model_status.get("model_path") or st.get("current_model"),
-                    "device": model_status.get("device") or st.get("device"),
-                    "last_error": model_status.get("last_error") or st.get("last_error"),
-                }
-            )
-        except Exception as exc:
-            st.update(
-                {
-                    "alive": False,
-                    "url": base_url,
-                    "health": {},
-                    "model_status": {},
-                    "last_error": str(exc),
-                }
-            )
+        if lite:
+            st.update({"alive": None, "url": base_url, "health": {}, "model_status": {}})
+        else:
+            try:
+                health = _fetch_json(f"{base_url}/health")
+                model_status = _fetch_json(f"{base_url}/model_status")
+                st.update(
+                    {
+                        "alive": True,
+                        "url": base_url,
+                        "worker_id": health.get("worker_id"),
+                        "health": health,
+                        "model_status": model_status,
+                        "current_model": model_status.get("model_path") or st.get("current_model"),
+                        "device": model_status.get("device") or st.get("device"),
+                        "last_error": model_status.get("last_error") or st.get("last_error"),
+                    }
+                )
+            except Exception as exc:
+                st.update(
+                    {
+                        "alive": False,
+                        "url": base_url,
+                        "health": {},
+                        "model_status": {},
+                        "last_error": str(exc),
+                    }
+                )
         tts_status[worker_type] = st
 
     # Optional project scoped voice preset usage
