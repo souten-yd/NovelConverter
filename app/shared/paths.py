@@ -1,18 +1,30 @@
-"""Centralised data-directory resolution.
-
-Priority:
-1. DATA_DIR env var  (set to /workspace/data in Docker)
-2. <repo_root>/data  (local dev fallback)
-"""
+"""Cross-platform path resolution helpers."""
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).parent.parent.parent  # NovelConverter/
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def get_repo_root() -> Path:
+    return _REPO_ROOT
+
 
 def get_data_dir() -> Path:
     env = os.environ.get("DATA_DIR", "")
-    if env:
-        return Path(env)
-    return _REPO_ROOT / "data"
+    data = Path(env) if env else (_REPO_ROOT / "data")
+    data.mkdir(parents=True, exist_ok=True)
+    return data
+
+
+def get_models_root() -> Path:
+    root = Path(os.environ.get("MODELS_ROOT", str(get_data_dir() / "models")))
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def get_cache_root() -> Path:
+    root = Path(os.environ.get("CACHE_ROOT", str(_REPO_ROOT / "cache")))
+    root.mkdir(parents=True, exist_ok=True)
+    return root

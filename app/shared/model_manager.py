@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from app.shared.logger import get_logger
-from app.shared.paths import get_data_dir
+from app.shared.paths import get_cache_root, get_models_root
 
 logger = get_logger("model_manager")
 
@@ -46,7 +46,7 @@ QWEN3_TTS_MODELS: Dict[str, dict] = {
 
 
 def _models_root() -> Path:
-    return get_data_dir() / "models" / "qwen3_tts"
+    return get_models_root() / "qwen3_tts"
 
 
 # ── Path helpers ─────────────────────────────────────────────────────────────
@@ -147,6 +147,7 @@ def ensure_model(model_key: str) -> Path:
             repo_id=repo_id,
             local_dir=str(model_dir),
             local_dir_use_symlinks=False,
+            cache_dir=str(get_cache_root() / "huggingface"),
         )
     except Exception as e:
         logger.error(f"[model_manager] Failed to download {repo_id}: {e}")

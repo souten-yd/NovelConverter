@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.shared.logger import get_logger
-from app.shared.paths import get_data_dir
+from app.shared.paths import get_cache_root, get_models_root
 
 logger = get_logger("llm_downloader")
 
@@ -23,7 +23,7 @@ _MIN_FILE_SIZE = 1_000_000_000  # 1 GB sanity check
 
 def _llm_models_dir() -> Path:
     """LLM models directory, shared with llm_manager."""
-    d = get_data_dir() / "models"
+    d = get_models_root() / "llm"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -75,6 +75,7 @@ def ensure_llm_model() -> Path:
             filename=LLM_FILENAME,
             local_dir=str(models_dir),
             local_dir_use_symlinks=False,
+            cache_dir=str(get_cache_root() / "huggingface"),
         )
         # hf_hub_download may put file in a subdirectory; move to top level
         src = Path(local_path)

@@ -34,7 +34,7 @@ logger = get_logger("ocr.ndlocr_lite")
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MODEL_DIR = "/workspace/ndlocr_models"
+_DEFAULT_MODEL_DIR = str((Path(__file__).resolve().parents[4] / "data" / "models" / "ocr" / "ndlocr"))
 
 # File extensions that indicate a downloaded model file
 _MODEL_EXTENSIONS = {".pth", ".pt", ".onnx", ".pdparams", ".bin", ".npz"}
@@ -103,7 +103,7 @@ def _check_model_files() -> tuple[bool, str, dict]:
         return False, (
             f"モデルディレクトリが見つかりません: {model_dir}  "
             f"(環境変数 NDLOCR_MODEL_DIR={model_dir} に ndlocr モデルを配置してください。"
-            "python3 scripts/download_ndlocr_models.py でダウンロード可能です)"
+            "python scripts/download_ndlocr_models.py でダウンロード可能です)"
         ), details
 
     model_files = [
@@ -122,7 +122,7 @@ def _check_model_files() -> tuple[bool, str, dict]:
         return False, (
             f"モデルファイルが見つかりません: {model_dir} にモデルが未配置です  "
             f"(対象拡張子: {', '.join(sorted(_MODEL_EXTENSIONS))})。"
-            "手動ダウンロードが必要です: python3 scripts/download_ndlocr_models.py"
+            "手動ダウンロードが必要です: python scripts/download_ndlocr_models.py"
         ), details
 
     if not aux_files:
@@ -130,7 +130,7 @@ def _check_model_files() -> tuple[bool, str, dict]:
         return False, (
             f"モデル補助ファイルが見つかりません: {model_dir}  "
             f"(対象拡張子: {', '.join(sorted(_AUX_EXTENSIONS))})。"
-            "手動ダウンロードが必要です: python3 scripts/download_ndlocr_models.py"
+            "手動ダウンロードが必要です: python scripts/download_ndlocr_models.py"
         ), details
 
     logger.debug(f"NDLOCR-Lite: {len(model_files)} model file(s) found in {model_dir}")
@@ -219,7 +219,7 @@ class NDLOCRLiteEngine(OCREngine):
                 "NDLOCR-Lite は GitHub からインストール: "
                 "pip install git+https://github.com/ndl-lab/ndlocr-lite.git  "
                 "モデルは手動で NDLOCR_MODEL_DIR へ配置してください。"
-                "ダウンロード: python3 scripts/download_ndlocr_models.py"
+                "ダウンロード: python scripts/download_ndlocr_models.py"
             ),
             "status": status,
         }

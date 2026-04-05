@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.shared.database import init_db
 from app.shared.logger import get_logger
+from app.shared.runtime_backends import load_runtime_status
 from app.orchestrator.routers import projects, processing, segments, voice_mapping, render, ui, llm, characters, ocr_viewer
 from app.orchestrator.routers.voice_mapping import tts_router
 
@@ -189,6 +190,7 @@ def full_status() -> Dict[str, Any]:
         "orchestrator": {"status": "ok"},
         "workers": workers,
         "all_healthy": all_ok,
+        "runtime": load_runtime_status(),
     }
     try:
         from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
@@ -205,7 +207,7 @@ def full_status() -> Dict[str, Any]:
 @app.get("/api/system/models")
 def system_models_status() -> Dict[str, Any]:
     """Return status of all models: Qwen3-TTS + LLM."""
-    result: Dict[str, Any] = {}
+    result: Dict[str, Any] = {"runtime": load_runtime_status()}
 
     # Qwen3-TTS models
     try:

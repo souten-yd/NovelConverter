@@ -1,0 +1,44 @@
+# Core app
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+jinja2>=3.1.4
+python-multipart>=0.0.9
+aiofiles>=23.2.0
+sqlalchemy>=2.0.0
+pydantic>=2.7.0
+requests>=2.31.0
+httpx>=0.27.0
+
+# Data / OCR
+pillow>=10.0.0
+pytesseract>=0.3.10
+ebooklib>=0.18
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+rarfile>=4.1
+
+# Model download
+huggingface_hub>=0.23.0
+
+# TTS / ML
+transformers>=4.44.0
+accelerate>=0.30.0
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+soundfile>=0.12.1
+numpy>=1.26.0
+
+# Windows local GPU attempt (AMD/DirectML)
+torch>=2.3.0
+torchaudio>=2.3.0
+torch-directml>=0.2.5.dev240914
+onnxruntime-directml>=1.20.0
+
+# OCR stack (Windows AMD is CPU-first for Paddle)
+paddleocr==3.4.0
+paddlex==3.4.3
+
+# Optional local OCR engines
+qwen-vl-utils
+# NDLOCR-Lite (best effort; may fail in some environments)
+# git+https://github.com/ndl-lab/ndlocr-lite.git

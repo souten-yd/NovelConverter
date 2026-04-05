@@ -6,6 +6,7 @@ source of truth for ordering (page_index) and ruby structure.
 """
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -303,7 +304,7 @@ class PipelineResult:
 class PipelineConfig:
     """User-configurable settings for the OCR pipeline."""
     # PaddleOCR settings
-    paddle_device: str = "gpu:0"
+    paddle_device: str = os.environ.get("OCR_PADDLE_DEVICE", "gpu:0")
     paddle_use_layout: bool = True
     paddle_max_workers: int = 2
     paddle_lang: str = "japan"
