@@ -1,0 +1,30 @@
+{
+  "platform": "windows-local",
+  "python": "3.11",
+  "venv_dir": ".venv",
+  "data_dir": "data",
+  "models_root": "data/models",
+  "cache_root": "cache",
+  "huggingface_cache": "cache/huggingface",
+  "llama": {
+    "preferred_backend": "vulkan",
+    "fallback_backend": "cpu",
+    "runtime_dir": "runtime/llama/windows-vulkan",
+    "repo": "ggml-org/llama.cpp",
+    "binary_names": ["llama-server.exe", "llama-server"]
+  },
+  "tts": {
+    "torch_preferred": "directml",
+    "fallback": "cpu"
+  },
+  "onnx": {
+    "preferred": "directml",
+    "fallback": "cpu"
+  },
+  "ocr": {
+    "preferred": "paddle_cpu",
+    "secondary": "ndlocr",
+    "fallback": "tesseract",
+    "ndlocr_model_dir": "data/models/ocr/ndlocr"
+  }
+}

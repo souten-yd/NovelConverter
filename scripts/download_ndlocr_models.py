@@ -6,7 +6,7 @@ weights in the pip package.  This script downloads the required ONNX models
 from the official release assets and validates the result.
 
 Usage:
-    python3 scripts/download_ndlocr_models.py
+    python scripts/download_ndlocr_models.py
 
 Environment variables:
     NDLOCR_MODEL_DIR  Target directory (default: /workspace/ndlocr_models)
@@ -27,7 +27,7 @@ from urllib.request import urlopen, Request
 # Configuration
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MODEL_DIR = "/workspace/ndlocr_models"
+_DEFAULT_MODEL_DIR = str((Path(__file__).resolve().parents[1] / "data" / "models" / "ocr" / "ndlocr"))
 
 # NDLOCR-Lite official model archive URLs.
 # These point to the ndl-lab GitHub releases.  Update the URLs when the

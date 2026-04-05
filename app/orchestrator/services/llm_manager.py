@@ -14,12 +14,12 @@ from typing import Dict, List, Optional
 import requests
 
 from app.shared.logger import get_logger
-from app.shared.paths import get_data_dir
+from app.shared.paths import get_models_root
 
 logger = get_logger("llm_manager")
 
 LLAMA_SERVER_PORT = int(os.environ.get("LLAMA_SERVER_PORT", "8080"))
-MODELS_DIR_NAME = "models"
+MODELS_DIR_NAME = "llm"
 
 _STARTUP_TIMEOUT = 60  # seconds to wait for llama-server to become ready
 _HEALTH_INTERVAL = 2   # seconds between health-check polls
@@ -62,7 +62,7 @@ _auto_unload_running = False
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _models_dir() -> Path:
-    d = get_data_dir() / MODELS_DIR_NAME
+    d = get_models_root() / MODELS_DIR_NAME
     d.mkdir(parents=True, exist_ok=True)
     return d
 

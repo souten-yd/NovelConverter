@@ -10,6 +10,7 @@ Provides:
 from __future__ import annotations
 
 import json
+import os
 import threading
 import uuid
 from datetime import datetime
@@ -33,7 +34,7 @@ router = APIRouter(prefix="/api/projects", tags=["ocr_viewer"])
 # ---------------------------------------------------------------------------
 
 class PipelineConfigRequest(BaseModel):
-    paddle_device: str = "gpu:0"
+    paddle_device: str = os.environ.get("OCR_PADDLE_DEVICE", "gpu:0")
     paddle_use_layout: bool = True
     paddle_max_workers: int = 2
     paddle_lang: str = "japan"

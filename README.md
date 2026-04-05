@@ -306,3 +306,21 @@ NovelConverter/
 ## ライセンス
 
 MIT License
+
+## Windows 11 ローカル起動（AMD GPU / 非 ROCm）
+
+本リポジトリでは `run_local_windows.bat` を追加し、`.venv` の自動構築・再利用で起動できます。
+
+### 使い方
+
+1. Python 3.11 をインストール（`py -3.11` が使える状態）
+2. プロジェクトルートで `run_local_windows.bat` を実行
+
+初回は以下を自動実行します。
+- `.venv` 作成
+- `requirements-local-windows.txt` のインストール
+- モデル保存ディレクトリ作成
+- Qwen3-TTS / Gemma GGUF / NDLOCR モデルの不足分ダウンロード
+- バックエンド判定（LLM Vulkan優先、PyTorch/ONNX DirectML優先、失敗時CPU）
+
+2回目以降は `.venv` と既存モデルを再利用し、不足分のみ補修します。
