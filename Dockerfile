@@ -55,6 +55,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
     OCR_VENV_PATH=/opt/venvs/ocr \
     OCR_PYTHON=/opt/venvs/ocr/bin/python \
+    NDLOCR_VENV_PATH=/opt/venvs/ndlocr \
+    NDLOCR_PYTHON=/opt/venvs/ndlocr/bin/python \
+    NDLOCR_DEVICE=cpu \
     PADDLE_WHEEL_INDEX=cu126 \
     BASE_IMAGE_CUDA=12.8 \
     LD_LIBRARY_PATH=/opt/llama-cpp/lib:${LD_LIBRARY_PATH}
@@ -155,6 +158,8 @@ RUN python3 -m venv /opt/venvs/ocr \
 # ── NDLOCR-Lite (vendored upstream checkout at fixed commit) ─────────────────
 ARG NDLOCR_LITE_REPO=https://github.com/ndl-lab/ndlocr-lite.git
 ARG NDLOCR_LITE_COMMIT=master
+ARG NDLOCR_DEVICE=cpu
+ENV NDLOCR_DEVICE=${NDLOCR_DEVICE}
 RUN set -eux; \
     commit="${NDLOCR_LITE_COMMIT:-master}"; \
     if [ -z "${commit}" ]; then commit=master; fi; \
@@ -174,6 +179,21 @@ RUN set -eux; \
     ls -la /opt/ndlocr-lite/src/config; \
     test -f /opt/ndlocr-lite/src/config/ndl.yaml; \
     test -f /opt/ndlocr-lite/src/config/NDLmoji.yaml
+RUN set -eux; \
+    python3 -m venv /opt/venvs/ndlocr; \
+    /opt/venvs/ndlocr/bin/python -m pip install --upgrade pip setuptools wheel; \
+    /opt/venvs/ndlocr/bin/python -m pip install --no-cache-dir -r /opt/ndlocr-lite/requirements.txt; \
+    if [ "${NDLOCR_DEVICE}" = "cuda" ]; then \
+      /opt/venvs/ndlocr/bin/python -m pip uninstall -y onnxruntime || true; \
+      /opt/venvs/ndlocr/bin/python -m pip install --no-cache-dir onnxruntime-gpu==1.23.2; \
+    fi; \
+    /opt/venvs/ndlocr/bin/python - <<'PY' \
+import onnxruntime \
+import yaml \
+import cv2 \
+import numpy \
+print("onnxruntime ok") \
+PY
 
 # ── Application code ──────────────────────────────────────────────────────────
 COPY app/        ${APP_DIR}/app/
