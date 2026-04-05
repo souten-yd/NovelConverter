@@ -33,6 +33,31 @@ MAX_ARCHIVE_TOTAL_BYTES = 500 * 1024 * 1024
 MAX_ARCHIVE_NESTED_DEPTH = 8
 
 
+def _compact_warnings(
+    warnings: list[str],
+    *,
+    detail_limit: int = 3,
+) -> list[str]:
+    """Limit repeated OCR warnings to avoid huge per-page traceback spam."""
+    if not warnings:
+        return []
+    unique: list[str] = []
+    counts: dict[str, int] = {}
+    for w in warnings:
+        key = (w or "").strip()
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+        if key not in unique:
+            unique.append(key)
+    compact = unique[:detail_limit]
+    shown = sum(counts[w] for w in compact)
+    hidden = sum(counts.values()) - shown
+    if hidden > 0:
+        compact.append(f"{hidden} additional warnings aggregated")
+    return compact
+
+
 @dataclass
 class IngestedText:
     relative_path: str
@@ -278,17 +303,18 @@ def extract_images_parallel(
     if len(image_paths) < 2 or ocr_engine == "tesseract":
         # Sequential fallback for single images or Tesseract
         results = []
-        warnings_all = []
+        warnings_all: list[str] = []
         for i, p in enumerate(image_paths):
             text, w = extract_image_text(p, ocr_engine=ocr_engine)
-            results.append((p, text, w))
+            compact_w = _compact_warnings(w)
+            results.append((p, text, compact_w))
             warnings_all.extend(w)
             if progress_cb:
                 try:
                     progress_cb("ocr_page", page=i + 1, total_pages=len(image_paths))
                 except Exception:
                     pass
-        return results, warnings_all
+        return results, _compact_warnings(warnings_all)
 
     # Use the enhanced pipeline
     try:
@@ -308,7 +334,7 @@ def extract_images_parallel(
         )
 
         results = []
-        warnings_all = []
+        warnings_all: list[str] = []
         # Build path → result mapping, sorted by page_index
         for page in sorted(pipeline_result.pages, key=lambda p: p.page_index):
             idx = page.page_index
@@ -317,13 +343,14 @@ def extract_images_parallel(
             w = page.warnings
             if page.status == "error":
                 w = [page.error_message] + w
+            w = _compact_warnings(w)
             # Add the OCR header for compatibility with existing flow
             if text:
                 text = f"===== OCR: {path.name} =====\n{text}"
             results.append((path, text, w))
             warnings_all.extend(w)
 
-        return results, warnings_all
+        return results, _compact_warnings(warnings_all)
 
     except Exception as exc:
         logger.warning(f"Enhanced pipeline failed, falling back to sequential: {exc}")
@@ -331,9 +358,10 @@ def extract_images_parallel(
         warnings_all = [f"Enhanced pipeline error: {exc}"]
         for i, p in enumerate(image_paths):
             text, w = extract_image_text(p, ocr_engine=ocr_engine)
-            results.append((p, text, w))
+            compact_w = _compact_warnings(w)
+            results.append((p, text, compact_w))
             warnings_all.extend(w)
-        return results, warnings_all
+        return results, _compact_warnings(warnings_all)
 
 
 def build_combined_text(parts: list[IngestedText]) -> str:
