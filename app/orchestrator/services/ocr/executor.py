@@ -92,6 +92,8 @@ def _run_paddle_ocr(
                 for item in raw_items
                 if str(item.get("text", "")).strip()
             ).strip()
+        if result.status == "ok" and (result.warnings or not result.plain_text.strip()):
+            result.status = "warning"
 
     except Exception as exc:
         result.status = "error"
@@ -176,6 +178,8 @@ def _run_ndlocr_lite(
             if newline_pos >= 0:
                 plain = plain[newline_pos + 1:]
         result.plain_text = plain.strip()
+        if result.status == "ok" and (result.warnings or not result.plain_text.strip()):
+            result.status = "warning"
 
         # NDLOCR-Lite doesn't provide bboxes, so tokens stay empty
         # Ruby detection will be limited for this engine
@@ -226,6 +230,8 @@ def _run_fallback(
             if newline_pos >= 0:
                 plain = plain[newline_pos + 1:]
         result.plain_text = plain.strip()
+        if result.status == "ok" and (result.warnings or not result.plain_text.strip()):
+            result.status = "warning"
 
     except Exception as exc:
         result.status = "error"

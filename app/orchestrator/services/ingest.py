@@ -375,6 +375,20 @@ def build_combined_text(parts: list[IngestedText]) -> str:
     return "\n\n".join(x for x in warn_body if x).strip() + "\n"
 
 
+def _strip_ocr_header(text: str) -> str:
+    src = text or ""
+    if src.startswith("===== OCR:") or src.startswith("===== EPUB:"):
+        newline_pos = src.find("\n")
+        if newline_pos >= 0:
+            return src[newline_pos + 1:]
+    return src
+
+
+def _payload_chars(text: str) -> int:
+    payload = _strip_ocr_header(text).strip()
+    return len(payload)
+
+
 def write_ingest_manifest(project_dir: Path, manifest: dict[str, Any]) -> Path:
     path = project_dir / "ingest_manifest.json"
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -434,7 +448,7 @@ def ingest_uploaded_file(
         warnings.extend(w)
         status = "ok" if text else "warning"
         ingested.append(IngestedText(relative_path=filename, kind="epub", text=text, status="ok" if text else "skipped", warning="; ".join(w) if w else None))
-        extracted_files.append({"relative_path": filename, "kind": "epub", "chars": len(text), "status": status, "warning": "; ".join(w) if w else None})
+        extracted_files.append({"relative_path": filename, "kind": "epub", "chars": _payload_chars(text), "status": status, "warning": "; ".join(w) if w else None})
         detected = source_type = "epub"
     elif ext in IMAGE_EXTENSIONS:
         _cb("page_scan", total_pages=1)
@@ -445,7 +459,7 @@ def ingest_uploaded_file(
         warnings.extend(w)
         status = "ok" if text else "warning"
         ingested.append(IngestedText(relative_path=filename, kind="image", text=text, status="ok" if text else "skipped", warning="; ".join(w) if w else None))
-        extracted_files.append({"relative_path": filename, "kind": "image", "chars": len(text), "status": status, "warning": "; ".join(w) if w else None})
+        extracted_files.append({"relative_path": filename, "kind": "image", "chars": _payload_chars(text), "status": status, "warning": "; ".join(w) if w else None})
         detected = source_type = "image"
     else:
         _cb("unpack")
@@ -491,7 +505,7 @@ def ingest_uploaded_file(
                 rel_entry["kind"] = "epub"
 
             warnings.extend(proc_warnings)
-            rel_entry["chars"] = len(text)
+            rel_entry["chars"] = _payload_chars(text)
             rel_entry["status"] = "ok" if text else "warning"
             rel_entry["warning"] = "; ".join(proc_warnings) if proc_warnings else None
 
@@ -523,7 +537,7 @@ def ingest_uploaded_file(
                 rel_entry["kind"] = "image"
                 for wi in proc_warnings:
                     _cb("ocr_page", page=processed_count, total_pages=total_pages, warning=wi)
-                rel_entry["chars"] = len(text)
+                rel_entry["chars"] = _payload_chars(text)
                 rel_entry["status"] = "ok" if text else "warning"
                 rel_entry["warning"] = "; ".join(proc_warnings) if proc_warnings else None
 
@@ -543,6 +557,7 @@ def ingest_uploaded_file(
     normalized_filename = "uploaded_normalized.txt"
     save_project_text(project_dir, combined, filename=normalized_filename)
 
+    processed_entries = [f for f in extracted_files if f.get("status") == "ok"]
     manifest = {
         "original_upload_name": filename,
         "detected_input_type": detected,
@@ -550,8 +565,8 @@ def ingest_uploaded_file(
         "warnings": warnings,
         "totals": {
             "files": len(extracted_files),
-            "processed": len([f for f in extracted_files if f["status"] == "ok"]),
-            "chars": len(combined),
+            "processed": len(processed_entries),
+            "chars": sum(int(f.get("chars", 0) or 0) for f in processed_entries),
         },
     }
     write_ingest_manifest(project_dir, manifest)
