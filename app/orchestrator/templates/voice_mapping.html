@@ -12,7 +12,7 @@
   </div>
 </div>
 
-<p class="text-muted">各話者にTTSワーカーと音声パラメータを割り当ててください。</p>
+<p class="text-muted">まず Voice Preset を選択してください。Preset未選択時のみ、下部の手入力項目が有効になります。</p>
 
 <div id="voiceMappings">
 {% for entry in speaker_profiles %}
@@ -30,7 +30,7 @@
   <div class="voice-card-body">
     <div class="form-grid">
       <label>Voice Preset
-        <select class="input vm-field" data-field="preset_id" onchange="applyPresetToCard(this)">
+        <select class="input vm-field" data-field="preset_id" onchange="onPresetChanged(this)">
           <option value="">未選択（手入力）</option>
           {% for p in voice_presets %}
           <option value="{{ p.preset_id }}" {{ 'selected' if vp and vp.preset_id == p.preset_id }}>
@@ -39,55 +39,66 @@
           {% endfor %}
         </select>
       </label>
-      <label>ワーカー
-        <select class="input vm-worker" data-field="worker_type">
-          <option value="custom" {{ 'selected' if not vp or vp.worker_type == 'custom' }}>custom</option>
-          <option value="base" {{ 'selected' if vp and vp.worker_type == 'base' }}>base (clone)</option>
-          <option value="design" {{ 'selected' if vp and vp.worker_type == 'design' }}>design</option>
-        </select>
-      </label>
-      <label>言語
-        <input type="text" class="input vm-field" data-field="language" value="{{ vp.language if vp else 'ja' }}">
-      </label>
-      <label>スピード
-        <input type="number" class="input vm-field" data-field="speed" value="{{ vp.speed if vp else 1.0 }}" step="0.1" min="0.5" max="2.0">
-      </label>
-      <label>前無音 (ms)
-        <input type="number" class="input vm-field" data-field="pause_ms_before" value="{{ vp.pause_ms_before if vp else 0 }}" min="0">
-      </label>
-      <label>後無音 (ms)
-        <input type="number" class="input vm-field" data-field="pause_ms_after" value="{{ vp.pause_ms_after if vp else 300 }}" min="0">
-      </label>
-      <label>音量調整 (dB)
-        <input type="number" class="input vm-field" data-field="volume_gain_db" value="{{ vp.volume_gain_db if vp else 0.0 }}" step="0.5">
-      </label>
+      <div class="preset-meta" data-role="preset-meta" style="grid-column: 1 / -1; border: 1px solid #ddd; border-radius: 8px; padding: 10px; background: #fafafa; display:none">
+        <div><strong data-role="preset-name"></strong></div>
+        <div class="text-muted" data-role="preset-updated"></div>
+        <div data-role="preset-description" style="margin-top:4px;"></div>
+        <audio data-role="preset-audio" controls style="width:100%; margin-top:8px; display:none"></audio>
+      </div>
     </div>
 
-    <div class="voice-mode-section">
-      <label>Speaker名 (custom用)
-        <input type="text" class="input vm-field" data-field="speaker_name" value="{{ vp.speaker_name if vp and vp.speaker_name else '' }}" placeholder="例: Aria">
-      </label>
-      <label>Instruct (custom用)
-        <input type="text" class="input vm-field" data-field="instruct" value="{{ vp.instruct if vp and vp.instruct else '' }}" placeholder="例: 明るく元気に">
-      </label>
-    </div>
+    <div class="manual-fields" data-role="manual-fields">
+      <div class="form-grid">
+        <label>ワーカー
+          <select class="input vm-field" data-field="worker_type">
+            <option value="custom" {{ 'selected' if not vp or vp.worker_type == 'custom' }}>custom</option>
+            <option value="base" {{ 'selected' if vp and vp.worker_type == 'base' }}>base (clone)</option>
+            <option value="design" {{ 'selected' if vp and vp.worker_type == 'design' }}>design</option>
+          </select>
+        </label>
+        <label>言語
+          <input type="text" class="input vm-field" data-field="language" value="{{ vp.language if vp else 'ja' }}">
+        </label>
+        <label>スピード
+          <input type="number" class="input vm-field" data-field="speed" value="{{ vp.speed if vp else 1.0 }}" step="0.1" min="0.5" max="2.0">
+        </label>
+        <label>前無音 (ms)
+          <input type="number" class="input vm-field" data-field="pause_ms_before" value="{{ vp.pause_ms_before if vp else 0 }}" min="0">
+        </label>
+        <label>後無音 (ms)
+          <input type="number" class="input vm-field" data-field="pause_ms_after" value="{{ vp.pause_ms_after if vp else 300 }}" min="0">
+        </label>
+        <label>音量調整 (dB)
+          <input type="number" class="input vm-field" data-field="volume_gain_db" value="{{ vp.volume_gain_db if vp else 0.0 }}" step="0.5">
+        </label>
+      </div>
 
-    <div class="voice-mode-section">
-      <label>Voice Description (design用)
-        <textarea class="input vm-field" data-field="voice_description" rows="2" placeholder="例: 20歳の女性、明るく元気な声">{{ vp.voice_description if vp and vp.voice_description else '' }}</textarea>
-      </label>
-    </div>
+      <div class="voice-mode-section">
+        <label>Speaker名 (custom用)
+          <input type="text" class="input vm-field" data-field="speaker_name" value="{{ vp.speaker_name if vp and vp.speaker_name else '' }}" placeholder="例: Aria">
+        </label>
+        <label>Instruct (custom用)
+          <input type="text" class="input vm-field" data-field="instruct" value="{{ vp.instruct if vp and vp.instruct else '' }}" placeholder="例: 明るく元気に">
+        </label>
+      </div>
 
-    <div class="voice-mode-section">
-      <label>参照音声パス (base clone用)
-        <input type="text" class="input vm-field" data-field="reference_audio_path" value="{{ vp.reference_audio_path if vp and vp.reference_audio_path else '' }}" placeholder="/path/to/reference.wav">
-      </label>
-      <label>参照テキスト (base clone用)
-        <input type="text" class="input vm-field" data-field="reference_text" value="{{ vp.reference_text if vp and vp.reference_text else '' }}" placeholder="参照音声のテキスト">
-      </label>
+      <div class="voice-mode-section">
+        <label>Voice Description (design用)
+          <textarea class="input vm-field" data-field="voice_description" rows="2" placeholder="例: 20歳の女性、明るく元気な声">{{ vp.voice_description if vp and vp.voice_description else '' }}</textarea>
+        </label>
+      </div>
+
+      <div class="voice-mode-section">
+        <label>参照音声パス (base clone用)
+          <input type="text" class="input vm-field" data-field="reference_audio_path" value="{{ vp.reference_audio_path if vp and vp.reference_audio_path else '' }}" placeholder="/path/to/reference.wav">
+        </label>
+        <label>参照テキスト (base clone用)
+          <input type="text" class="input vm-field" data-field="reference_text" value="{{ vp.reference_text if vp and vp.reference_text else '' }}" placeholder="参照音声のテキスト">
+        </label>
+      </div>
     </div>
   </div>
-  <audio id="test-audio-{{ sp.id }}" style="display:none"></audio>
+  <audio id="test-audio-{{ sp.id }}" controls style="display:none; width:100%; margin-top:8px"></audio>
 </div>
 {% endfor %}
 </div>
@@ -101,7 +112,12 @@ const projectId = '{{ project.id }}';
 const voicePresets = {
   {% for p in voice_presets %}
   '{{ p.preset_id }}': {
+    preset_id: {{ p.preset_id | tojson }},
+    name: {{ p.name | tojson }},
+    description: {{ (p.description or '') | tojson }},
     engine_type: {{ p.engine_type | tojson }},
+    updated_at: {{ (p.updated_at.isoformat() if p.updated_at else '') | tojson }},
+    sample_audio_path: {{ (p.sample_audio_path or '') | tojson }},
     synthesis_params: {{ (p.synthesis_params or {}) | tojson }}
   },
   {% endfor %}
@@ -112,37 +128,55 @@ function getCardData(card) {
   const data = { speaker_id: speakerId, profile: {} };
   card.querySelectorAll('[data-field]').forEach(el => {
     const field = el.dataset.field;
-    const val = el.tagName === 'SELECT' ? el.value : el.value;
-    data.profile[field] = val;
+    data.profile[field] = el.value;
   });
-  // type coerce
   ['speed','pause_ms_before','pause_ms_after','volume_gain_db'].forEach(f => {
     if (data.profile[f] !== undefined) data.profile[f] = parseFloat(data.profile[f]) || 0;
   });
+  if (!data.profile.preset_id) {
+    data.profile.preset_id = null;
+  }
   return data;
 }
 
-function applyPresetToCard(selectEl) {
-  const presetId = selectEl.value;
-  if (!presetId) return;
+function renderPresetMeta(card, presetId) {
+  const wrap = card.querySelector('[data-role="preset-meta"]');
+  const nameEl = card.querySelector('[data-role="preset-name"]');
+  const updatedEl = card.querySelector('[data-role="preset-updated"]');
+  const descEl = card.querySelector('[data-role="preset-description"]');
+  const audioEl = card.querySelector('[data-role="preset-audio"]');
+
+  if (!presetId || !voicePresets[presetId]) {
+    wrap.style.display = 'none';
+    return;
+  }
+
+  const p = voicePresets[presetId];
+  wrap.style.display = 'block';
+  nameEl.textContent = `${p.name} (${p.engine_type})`;
+  updatedEl.textContent = p.updated_at ? `更新: ${new Date(p.updated_at).toLocaleString()}` : '';
+  descEl.textContent = p.description || '説明なし';
+
+  if (p.sample_audio_path) {
+    audioEl.src = p.sample_audio_path;
+    audioEl.style.display = 'block';
+  } else {
+    audioEl.removeAttribute('src');
+    audioEl.style.display = 'none';
+  }
+}
+
+function onPresetChanged(selectEl) {
   const card = selectEl.closest('.voice-card');
-  const preset = voicePresets[presetId];
-  if (!card || !preset) return;
-  const synth = preset.synthesis_params || {};
-  const setField = (field, value) => {
-    const el = card.querySelector(`[data-field="${field}"]`);
-    if (el && value !== undefined && value !== null) el.value = value;
-  };
-  setField('worker_type', preset.engine_type || 'custom');
-  setField('speaker_name', synth.speaker_name || '');
-  setField('instruct', synth.instruct || '');
-  setField('voice_description', synth.voice_description || '');
-  setField('reference_audio_path', synth.reference_audio_path || '');
-  setField('reference_text', synth.reference_text || '');
-  setField('speed', synth.speed ?? 1.0);
-  setField('pause_ms_before', synth.pause_ms_before ?? 0);
-  setField('pause_ms_after', synth.pause_ms_after ?? 300);
-  setField('volume_gain_db', synth.volume_gain_db ?? 0.0);
+  const manualFields = card.querySelector('[data-role="manual-fields"]');
+  const presetId = selectEl.value;
+  renderPresetMeta(card, presetId);
+
+  if (presetId) {
+    manualFields.style.display = 'none';
+  } else {
+    manualFields.style.display = 'block';
+  }
 }
 
 async function saveAllMappings() {
@@ -166,7 +200,6 @@ async function saveAllMappings() {
 }
 
 async function testVoice(speakerId, speakerName) {
-  // save current first
   const card = document.querySelector(`.voice-card[data-speaker-id="${speakerId}"]`);
   const data = getCardData(card);
   await fetch(`/api/projects/${projectId}/voice_mappings`, {
@@ -175,44 +208,46 @@ async function testVoice(speakerId, speakerName) {
     body: JSON.stringify({mappings: [data]})
   });
 
-  // find sample text from a segment
   const testText = `${speakerName}の声のテストです。よろしくお願いします。`;
-  const workerType = data.profile.worker_type || 'custom';
-  const workerUrls = {custom: 'http://localhost:8002', base: 'http://localhost:8001', design: 'http://localhost:8003'};
-  const url = workerUrls[workerType];
+  const payload = {
+    preset_id: data.profile.preset_id,
+    worker_type: data.profile.worker_type || 'custom',
+    text: testText,
+    language: data.profile.language || 'ja',
+    speaker_name: data.profile.speaker_name || null,
+    instruct: data.profile.instruct || null,
+    voice_description: data.profile.voice_description || null,
+    reference_audio_path: data.profile.reference_audio_path || null,
+    reference_text: data.profile.reference_text || null,
+    speed: parseFloat(data.profile.speed) || 1.0,
+  };
 
   try {
-    const res = await fetch(`${url}/synthesize`, {
+    const res = await fetch(`/api/projects/${projectId}/speakers/${speakerId}/preview_voice`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        text: testText,
-        mode: workerType === 'base' ? 'clone' : workerType,
-        language: data.profile.language || 'ja',
-        speaker: data.profile.speaker_name || null,
-        instruct: data.profile.instruct || null,
-        voice_description: data.profile.voice_description || null,
-        speed: parseFloat(data.profile.speed) || 1.0,
-        output_path: null
-      })
+      body: JSON.stringify(payload),
     });
-    if (res.ok) {
-      const result = await res.json();
-      if (result.success && result.output_path) {
-        const audio = document.getElementById(`test-audio-${speakerId}`);
-        audio.src = result.output_path;
-        audio.style.display = 'block';
-        audio.play().catch(() => {});
-        alert(`生成完了: ${result.output_path}`);
-      } else {
-        alert(`生成失敗: ${result.error}`);
-      }
-    } else {
-      alert(`ワーカーへの接続失敗 (${url})`);
+    const body = await res.json();
+    if (!res.ok) {
+      alert(`生成失敗: ${body.detail || '不明なエラー'}`);
+      return;
     }
+
+    const audio = document.getElementById(`test-audio-${speakerId}`);
+    audio.src = body.preview_url;
+    audio.style.display = 'block';
+    await audio.play().catch(() => {});
   } catch(e) {
-    alert(`接続エラー: ${e.message}\nワーカーが起動しているか確認してください`);
+    alert(`接続エラー: ${e.message}`);
   }
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.voice-card').forEach(card => {
+    const selectEl = card.querySelector('[data-field="preset_id"]');
+    onPresetChanged(selectEl);
+  });
+});
 </script>
 {% endblock %}

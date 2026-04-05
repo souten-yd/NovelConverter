@@ -11,7 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.shared.database import SessionLocal, get_db
-from app.shared.models import Project, Segment, Speaker, VoiceProfile, RenderJob, Artifact
+from app.shared.models import Project, Segment, Speaker, VoiceProfile, VoicePreset, RenderJob, Artifact
 from app.shared.schemas import RenderJobOut, ArtifactOut
 from app.shared.logger import get_logger
 from app.shared.paths import get_data_dir
@@ -30,6 +30,55 @@ def _output_dir() -> Path:
 def _temp_dir() -> Path:
     return get_data_dir() / "temp"
 
+
+
+
+def _resolve_render_profile(profile: Optional[VoiceProfile], db: Session) -> dict[str, object]:
+    """Resolve synthesis parameters from preset_id at render time."""
+    resolved = {
+        "worker_type": "custom",
+        "language": "ja",
+        "speaker_name": None,
+        "instruct": None,
+        "voice_description": None,
+        "reference_audio_path": None,
+        "reference_text": None,
+        "speed": 1.0,
+    }
+    if not profile:
+        return resolved
+
+    resolved.update({
+        "worker_type": profile.worker_type or "custom",
+        "language": profile.language or "ja",
+        "speaker_name": profile.speaker_name,
+        "instruct": profile.instruct,
+        "voice_description": profile.voice_description,
+        "reference_audio_path": profile.reference_audio_path,
+        "reference_text": profile.reference_text,
+        "speed": profile.speed if profile.speed is not None else 1.0,
+    })
+
+    if not profile.preset_id:
+        return resolved
+
+    preset = db.get(VoicePreset, profile.preset_id)
+    if not preset:
+        return resolved
+
+    synth = preset.synthesis_params or {}
+    resolved["worker_type"] = preset.engine_type or resolved["worker_type"]
+    resolved["speaker_name"] = synth.get("speaker_name")
+    resolved["instruct"] = synth.get("instruct")
+    resolved["voice_description"] = synth.get("voice_description")
+    resolved["reference_audio_path"] = synth.get("reference_audio_path")
+    resolved["reference_text"] = synth.get("reference_text")
+    if "language" in synth:
+        resolved["language"] = synth.get("language")
+    if "speed" in synth:
+        resolved["speed"] = synth.get("speed")
+
+    return resolved
 
 def _get_project_or_404(project_id: str, db: Session) -> Project:
     p = db.get(Project, project_id)
@@ -93,18 +142,20 @@ def _render_background(project_id: str, job_id: str, skip_done: bool = True):
 
             out_path = output_dir / f"seg_{seg.order_index:05d}.wav"
 
+            resolved_profile = _resolve_render_profile(profile, db)
+
             try:
                 result = synthesize(
                     text=tts_text,
-                    worker_type=profile.worker_type if profile else "custom",
+                    worker_type=str(resolved_profile["worker_type"]),
                     output_path=out_path,
-                    language=profile.language if profile else "ja",
-                    speaker=profile.speaker_name if profile else None,
-                    instruct=profile.instruct if profile else None,
-                    voice_description=profile.voice_description if profile else None,
-                    reference_audio_path=profile.reference_audio_path if profile else None,
-                    reference_text=profile.reference_text if profile else None,
-                    speed=profile.speed if profile else 1.0,
+                    language=str(resolved_profile["language"]),
+                    speaker=resolved_profile["speaker_name"],
+                    instruct=resolved_profile["instruct"],
+                    voice_description=resolved_profile["voice_description"],
+                    reference_audio_path=resolved_profile["reference_audio_path"],
+                    reference_text=resolved_profile["reference_text"],
+                    speed=float(resolved_profile["speed"]),
                 )
                 if result.success and result.output_path:
                     seg.render_status = "done"

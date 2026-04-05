@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import os
-import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -36,6 +35,41 @@ def _temp_dir() -> Path:
     return d
 
 
+def _resolve_profile_data_with_preset(profile_data: dict[str, Any], db: Session) -> dict[str, Any]:
+    """Resolve voice profile synthesis fields from preset_id when selected.
+
+    Backward compatibility: when preset_id is empty/None, keep manually entered
+    fields exactly as provided.
+    """
+    resolved = dict(profile_data)
+    preset_id = resolved.get("preset_id")
+    if not preset_id:
+        return resolved
+
+    preset = db.get(VoicePreset, preset_id)
+    if not preset:
+        raise HTTPException(status_code=404, detail=f"Voice preset {preset_id} not found")
+
+    synth = preset.synthesis_params or {}
+    resolved["worker_type"] = preset.engine_type
+    resolved["speaker_name"] = synth.get("speaker_name")
+    resolved["instruct"] = synth.get("instruct")
+    resolved["voice_description"] = synth.get("voice_description")
+    resolved["reference_audio_path"] = synth.get("reference_audio_path")
+    resolved["reference_text"] = synth.get("reference_text")
+    if "language" in synth:
+        resolved["language"] = synth["language"]
+    if "speed" in synth:
+        resolved["speed"] = synth["speed"]
+    if "pause_ms_before" in synth:
+        resolved["pause_ms_before"] = synth["pause_ms_before"]
+    if "pause_ms_after" in synth:
+        resolved["pause_ms_after"] = synth["pause_ms_after"]
+    if "volume_gain_db" in synth:
+        resolved["volume_gain_db"] = synth["volume_gain_db"]
+    return resolved
+
+
 # ── Existing voice mapping endpoints ─────────────────────────────────────────
 
 @router.get("/{project_id}/speakers", response_model=list[SpeakerOut])
@@ -61,29 +95,7 @@ def set_voice_mappings(
             .filter(VoiceProfile.speaker_id == entry.speaker_id)
             .first()
         )
-        profile_data = entry.profile.model_dump()
-        preset_id = profile_data.get("preset_id")
-        if preset_id:
-            preset = db.get(VoicePreset, preset_id)
-            if not preset:
-                raise HTTPException(status_code=404, detail=f"Voice preset {preset_id} not found")
-            synth = preset.synthesis_params or {}
-            profile_data["worker_type"] = preset.engine_type
-            profile_data["speaker_name"] = synth.get("speaker_name")
-            profile_data["instruct"] = synth.get("instruct")
-            profile_data["voice_description"] = synth.get("voice_description")
-            profile_data["reference_audio_path"] = synth.get("reference_audio_path")
-            profile_data["reference_text"] = synth.get("reference_text")
-            if "language" in synth:
-                profile_data["language"] = synth["language"]
-            if "speed" in synth:
-                profile_data["speed"] = synth["speed"]
-            if "pause_ms_before" in synth:
-                profile_data["pause_ms_before"] = synth["pause_ms_before"]
-            if "pause_ms_after" in synth:
-                profile_data["pause_ms_after"] = synth["pause_ms_after"]
-            if "volume_gain_db" in synth:
-                profile_data["volume_gain_db"] = synth["volume_gain_db"]
+        profile_data = _resolve_profile_data_with_preset(entry.profile.model_dump(), db)
         if vp:
             for k, v in profile_data.items():
                 setattr(vp, k, v)
@@ -108,6 +120,7 @@ def list_voice_profiles(project_id: str, db: Session = Depends(get_db)):
 # ── Voice Design Studio endpoints ─────────────────────────────────────────────
 
 class VoicePreviewRequest(BaseModel):
+    preset_id: Optional[str] = None
     worker_type: str = "custom"        # base / custom / design
     text: str = "こんにちは、よろしくお願いします。"
     language: str = "ja"
@@ -137,19 +150,21 @@ def preview_voice(
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"preview_{preview_id}.wav"
 
+    resolved = _resolve_profile_data_with_preset(body.model_dump(), db)
+
     try:
         from app.orchestrator.services.tts_dispatcher import synthesize
         result = synthesize(
-            text=body.text,
-            worker_type=body.worker_type,
+            text=resolved.get("text", body.text),
+            worker_type=resolved.get("worker_type", "custom"),
             output_path=out_path,
-            language=body.language,
-            speaker=body.speaker_name,
-            instruct=body.instruct,
-            voice_description=body.voice_description,
-            reference_audio_path=body.reference_audio_path,
-            reference_text=body.reference_text,
-            speed=body.speed,
+            language=resolved.get("language") or "ja",
+            speaker=resolved.get("speaker_name"),
+            instruct=resolved.get("instruct"),
+            voice_description=resolved.get("voice_description"),
+            reference_audio_path=resolved.get("reference_audio_path"),
+            reference_text=resolved.get("reference_text"),
+            speed=float(resolved.get("speed") or 1.0),
         )
     except Exception as exc:
         logger.error(f"Voice preview synthesis failed: {exc}")
@@ -164,7 +179,7 @@ def preview_voice(
     return {
         "preview_url": f"/voice_preview/{speaker_id}/preview_{preview_id}.wav",
         "duration_seconds": result.duration_seconds,
-        "worker_type": body.worker_type,
+        "worker_type": resolved.get("worker_type", "custom"),
     }
 
 
