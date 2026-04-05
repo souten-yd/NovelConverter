@@ -74,6 +74,8 @@ def model_status():
     }
     if hasattr(synth, "get_load_error"):
         result["load_error"] = synth.get_load_error()
+    if hasattr(synth, "get_runtime_status"):
+        result.update(synth.get_runtime_status())
     try:
         from app.shared.model_manager import get_models_status
         tts_status = get_models_status()

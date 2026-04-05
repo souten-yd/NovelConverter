@@ -1,12 +1,4 @@
-"""Synthesizer for TTS Custom worker (Named Speaker mode).
-
-MockSynthesizer: generates tones at different frequencies per speaker.
-Qwen3CustomSynthesizer: real Qwen3-TTS-12Hz-1.7B-CustomVoice model.
-
-Requires:
-  - Qwen/Qwen3-TTS-Tokenizer-12Hz (shared tokenizer)
-  - Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice (custom voice model)
-"""
+"""Synthesizer for TTS Custom worker (Named Speaker mode)."""
 from __future__ import annotations
 
 import math
@@ -24,7 +16,6 @@ logger = get_logger("synth.custom")
 TEMP_DIR = Path(os.environ.get("DATA_DIR", str(Path(__file__).parent.parent.parent.parent / "data"))) / "temp"
 
 _DEFAULT_CUSTOM_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
-_DEFAULT_TOKENIZER = "Qwen/Qwen3-TTS-Tokenizer-12Hz"
 
 # Speaker → pitch (Hz) mapping for mock
 _SPEAKER_PITCHES = {
@@ -77,13 +68,9 @@ class MockSynthesizer:
 
 
 class Qwen3CustomSynthesizer:
-    """Real Qwen3-TTS CustomVoice synthesizer using 1.7B-CustomVoice model.
-
-    Uses named speakers (Aria, Roger, etc.) with optional instruct prompts.
-    """
+    """Real Qwen3-TTS CustomVoice synthesizer using 1.7B-CustomVoice model."""
 
     MODEL_ID = os.environ.get("TTS_CUSTOM_MODEL_PATH", _DEFAULT_CUSTOM_MODEL)
-    TOKENIZER_ID = os.environ.get("TTS_TOKENIZER_PATH", _DEFAULT_TOKENIZER)
 
     def __init__(self):
         self._model = None
@@ -91,6 +78,10 @@ class Qwen3CustomSynthesizer:
         self._supported_speakers: List[str] = list(_BUILT_IN_SPEAKERS)
         self._supported_languages: List[str] = ["ja", "en", "zh"]
         self._load_error: Optional[str] = None
+        self._device = "cpu"
+        self._model_dir = self.MODEL_ID
+        self._used_cpu_fallback = False
+        self._cpu_fallback_reason: Optional[str] = None
         self._load()
 
     def _resolve_model_path(self) -> str:
@@ -102,35 +93,64 @@ class Qwen3CustomSynthesizer:
             pass
         return self.MODEL_ID
 
-    def _resolve_tokenizer_path(self) -> str:
-        try:
-            from app.shared.model_manager import get_model_path, is_model_complete
-            if is_model_complete("tokenizer"):
-                return str(get_model_path("tokenizer"))
-        except Exception:
-            pass
-        return self.TOKENIZER_ID
-
     def _load(self):
         try:
-            from transformers import AutoModelForCausalLM, AutoProcessor
+            import sys
+            import transformers
+            import qwen_tts
             import torch
+            from transformers import AutoProcessor
+            from qwen_tts import Qwen3TTSModel
 
-            model_path = self._resolve_model_path()
-            tokenizer_path = self._resolve_tokenizer_path()
+            self._model_dir = self._resolve_model_path()
+            selected_device = "cuda" if torch.cuda.is_available() else "cpu"
+            self._used_cpu_fallback = False
+            self._cpu_fallback_reason = None
 
-            logger.info(f"Loading Qwen3-TTS Custom from {model_path}")
-            logger.info(f"Loading Qwen3-TTS tokenizer from {tokenizer_path}")
+            logger.info(f"sys.executable={sys.executable}")
+            logger.info(f"transformers.__version__={transformers.__version__}")
+            logger.info(f"qwen_tts.__file__={qwen_tts.__file__}")
+            logger.info(f"torch.__version__={torch.__version__}")
+            logger.info(f"torch.version.cuda={torch.version.cuda}")
+            logger.info(f"torch.cuda.is_available()={torch.cuda.is_available()}")
+            logger.info(f"selected_device={selected_device}")
+            logger.info(f"model_dir={self._model_dir}")
 
+            if selected_device == "cuda" and torch.version.cuda is None:
+                self._used_cpu_fallback = True
+                self._cpu_fallback_reason = "torch.cuda.is_available() is True but torch.version.cuda is None"
+                selected_device = "cpu"
+                logger.error(
+                    "CUDA runtime inconsistency detected (%s); forcing CPU fallback.",
+                    self._cpu_fallback_reason,
+                )
+
+            logger.info(f"Loading Qwen3-TTS Custom from {self._model_dir}")
             self._processor = AutoProcessor.from_pretrained(
-                model_path, trust_remote_code=True
+                self._model_dir,
+                trust_remote_code=True,
+                fix_mistral_regex=True,
             )
-            self._model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                device_map="auto",
+            self._model = Qwen3TTSModel.from_pretrained(
+                self._model_dir,
                 trust_remote_code=True,
             )
+
+            if hasattr(self._model, "to"):
+                try:
+                    self._model = self._model.to(selected_device)
+                except Exception as move_error:
+                    if selected_device == "cuda":
+                        self._used_cpu_fallback = True
+                        self._cpu_fallback_reason = f"CUDA move failed: {move_error}"
+                        logger.error(
+                            "Failed to move model to CUDA (%s); falling back to CPU.",
+                            move_error,
+                        )
+                        self._model = self._model.to("cpu")
+                        selected_device = "cpu"
+                    else:
+                        raise
 
             # Try to get supported speakers/languages from model
             if hasattr(self._model, "get_supported_speakers"):
@@ -147,18 +167,33 @@ class Qwen3CustomSynthesizer:
                 except Exception as e:
                     logger.warning(f"Could not get languages from model: {e}")
 
+            self._device = selected_device
             self._load_error = None
-            logger.info("Qwen3-TTS Custom loaded OK")
+            logger.info(
+                "Qwen3-TTS Custom loaded OK (device=%s, cpu_fallback=%s)",
+                self._device,
+                self._used_cpu_fallback,
+            )
         except Exception as e:
             self._load_error = str(e)
-            logger.error(f"Failed to load Qwen3-TTS Custom: {e}")
+            logger.exception("Failed to load Qwen3-TTS Custom")
             self._model = None
+            self._processor = None
+            self._device = "cpu"
 
     def is_loaded(self) -> bool:
-        return self._model is not None
+        return self._model is not None and self._processor is not None
 
     def get_load_error(self) -> Optional[str]:
         return self._load_error
+
+    def get_runtime_status(self) -> dict:
+        return {
+            "device": self._device,
+            "model_dir": self._model_dir,
+            "cpu_fallback": self._used_cpu_fallback,
+            "cpu_fallback_reason": self._cpu_fallback_reason,
+        }
 
     def available_models(self) -> list:
         return [self.MODEL_ID]
@@ -167,11 +202,11 @@ class Qwen3CustomSynthesizer:
         return self._supported_speakers
 
     def warmup(self) -> None:
-        if not self._model:
+        if not self.is_loaded():
             self._load()
 
     def synthesize(self, req: SynthesizeRequest) -> SynthesizeResponse:
-        if not self._model:
+        if not self.is_loaded():
             return SynthesizeResponse(
                 success=False,
                 error=f"Model not loaded: {self._load_error or 'unknown error'}",
@@ -181,9 +216,8 @@ class Qwen3CustomSynthesizer:
         out_path = _resolve_output_path(req.output_path, "custom")
 
         try:
-            import torch
             import soundfile as sf
-            import numpy as np
+            import torch
             from app.shared.audio_validator import validate_audio_array
 
             speaker = req.speaker or "Aria"
@@ -212,7 +246,7 @@ class Qwen3CustomSynthesizer:
             if req.instruct:
                 processor_kwargs["instruct"] = req.instruct
 
-            inputs = self._processor(**processor_kwargs).to(self._model.device)
+            inputs = self._processor(**processor_kwargs).to(self._device)
 
             with torch.no_grad():
                 output = self._model.generate(**inputs)
@@ -242,7 +276,7 @@ class Qwen3CustomSynthesizer:
                 worker_id="qwen3-custom",
             )
         except Exception as e:
-            logger.error(f"Qwen3CustomSynthesizer error: {e}")
+            logger.exception("Qwen3CustomSynthesizer error")
             if out_path.exists():
                 try:
                     out_path.unlink()
