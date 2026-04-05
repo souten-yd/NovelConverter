@@ -528,103 +528,35 @@ def start_download(repo_id: str, filename: str) -> str:
 
 _refcount: dict[str, int] = {}
 _refcount_lock = threading.Lock()
-_idle_unload_delay = 30  # seconds after last release before unloading
+_idle_unload_delay = int(os.environ.get("LLM_IDLE_TIMEOUT_SECONDS", "300"))
 
 
 def acquire(reason: str) -> None:
-    """Request LLM to be loaded. Increments refcount for the given reason.
-
-    If the LLM is not yet running, automatically loads the main model.
-    """
+    """Request LLM lease via shared resource manager and increment local refcount."""
     logger.info(f"[LLM] load requested: {reason}")
+    from app.orchestrator.services.resource_manager import acquire_lease
 
     with _refcount_lock:
         _refcount[reason] = _refcount.get(reason, 0) + 1
-        total = sum(_refcount.values())
-        logger.info(f"[LLM] refcount after acquire: {dict(_refcount)} (total={total})")
-
-    # Auto-load if not running
-    status = get_server_status()
-    if status.status == "running":
-        logger.info("[LLM] already loaded")
-        touch_last_used()
-        return
-
-    if status.status == "loading":
-        logger.info("[LLM] already loading, waiting...")
-        _wait_for_running(timeout=_STARTUP_TIMEOUT)
-        return
-
-    # Find and load the main model
-    main_model = get_main_model()
-    if not main_model:
-        # Try to find any available GGUF
-        models = list_local_models()
-        if models:
-            main_model = models[0]["filename"]
-            logger.info(f"[LLM] no main model set, using first available: {main_model}")
-        else:
-            # Try auto-downloading
-            try:
-                from app.shared.llm_downloader import ensure_llm_model, LLM_FILENAME
-                ensure_llm_model()
-                main_model = LLM_FILENAME
-                logger.info(f"[LLM] auto-downloaded LLM model: {main_model}")
-            except Exception as e:
-                logger.error(f"[LLM] no models available and auto-download failed: {e}")
-                return
-
-    settings = get_model_setting(main_model)
-    try:
-        load_model(
-            model_filename=main_model,
-            n_gpu_layers=settings.get("n_gpu_layers", -1),
-            ctx_size=settings.get("ctx_size", 4096),
-            batch_size=settings.get("batch_size", 512),
-            threads=settings.get("threads", -1),
-            flash_attn=settings.get("flash_attn", False),
-        )
-    except Exception as e:
-        logger.error(f"[LLM] auto-load failed: {e}")
+    acquire_lease(
+        "llm",
+        reason=reason,
+        options={"idle_timeout_seconds": _idle_unload_delay},
+    )
+    touch_last_used()
 
 
 def release(reason: str) -> None:
-    """Release LLM usage for the given reason. Unloads when refcount reaches 0."""
+    """Release LLM lease via shared resource manager and decrement local refcount."""
     logger.info(f"[LLM] release: {reason}")
+    from app.orchestrator.services.resource_manager import release_lease
 
     with _refcount_lock:
         if reason in _refcount:
             _refcount[reason] = max(0, _refcount[reason] - 1)
             if _refcount[reason] == 0:
                 del _refcount[reason]
-        total = sum(_refcount.values())
-        logger.info(f"[LLM] refcount after release: {dict(_refcount)} (total={total})")
-
-        if total == 0:
-            logger.info(f"[LLM] refcount=0, scheduling unload in {_idle_unload_delay}s")
-            # Schedule delayed unload (don't unload immediately in case another job starts soon)
-            t = threading.Thread(
-                target=_delayed_unload,
-                args=(_idle_unload_delay,),
-                daemon=True,
-                name=f"llm-delayed-unload-{reason}",
-            )
-            t.start()
-
-
-def _delayed_unload(delay: float) -> None:
-    """Unload LLM after a delay, but only if refcount is still 0."""
-    import time as _time
-    _time.sleep(delay)
-    with _refcount_lock:
-        total = sum(_refcount.values())
-    if total == 0:
-        status = get_server_status()
-        if status.status == "running":
-            logger.info("[LLM] unloading due to refcount=0")
-            unload_model()
-    else:
-        logger.info(f"[LLM] delayed unload cancelled: refcount={total}")
+    release_lease("llm", reason=reason)
 
 
 def _wait_for_running(timeout: float = 60) -> bool:
@@ -640,9 +572,11 @@ def _wait_for_running(timeout: float = 60) -> bool:
 def force_unload() -> None:
     """Force-unload LLM regardless of refcount."""
     logger.info("[LLM] force unload requested")
+    from app.orchestrator.services.resource_manager import unload
+
     with _refcount_lock:
         _refcount.clear()
-    unload_model()
+    unload("llm", scope="force")
 
 
 def is_llm_loaded() -> bool:
@@ -651,16 +585,20 @@ def is_llm_loaded() -> bool:
 
 def get_refcount_status() -> dict:
     """Return current refcount state for UI/API display."""
+    from app.orchestrator.services.resource_manager import get_status
+
     with _refcount_lock:
         counts = dict(_refcount)
         total = sum(counts.values())
     status = get_server_status()
+    lifecycle = get_status("llm")
     return {
         "refcounts": counts,
         "total_refcount": total,
         "llm_status": status.status,
         "model": status.model_filename,
         "idle_unload_delay": _idle_unload_delay,
+        "lifecycle": lifecycle,
     }
 
 

@@ -45,6 +45,17 @@ def _run_paddle_ocr(
     result.engine = EngineType.PADDLE_LAYOUT.value if use_layout else EngineType.PADDLE_FAST.value
     result.start_timer()
 
+    from app.orchestrator.services.resource_manager import acquire_lease, release_lease
+
+    lease_reason = f"ocr_page_{page_index}"
+    acquire_lease(
+        "paddleocr",
+        reason=lease_reason,
+        options={
+            "device": device,
+            "use_layout": use_layout,
+        },
+    )
     try:
         from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
 
@@ -81,6 +92,8 @@ def _run_paddle_ocr(
         result.status = "error"
         result.error_message = str(exc)
         logger.warning(f"PaddleOCR failed for page {page_index}: {exc}")
+    finally:
+        release_lease("paddleocr", reason=lease_reason)
 
     result.stop_timer()
     return result

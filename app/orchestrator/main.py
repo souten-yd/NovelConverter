@@ -198,11 +198,14 @@ def full_status() -> Dict[str, Any]:
             workers[name] = {"status": "unreachable", "error": str(e)}
             all_ok = False
 
+    from app.orchestrator.services.resource_manager import get_status as get_resource_status
+
     result = {
         "orchestrator": {"status": "ok"},
         "workers": workers,
         "all_healthy": all_ok,
         "runtime": load_runtime_status(),
+        "lifecycle": get_resource_status(),
     }
     try:
         from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
@@ -219,7 +222,8 @@ def full_status() -> Dict[str, Any]:
 @app.get("/api/system/models")
 def system_models_status() -> Dict[str, Any]:
     """Return status of all models: Qwen3-TTS + LLM."""
-    result: Dict[str, Any] = {"runtime": load_runtime_status()}
+    from app.orchestrator.services.resource_manager import get_status as get_resource_status
+    result: Dict[str, Any] = {"runtime": load_runtime_status(), "lifecycle": get_resource_status()}
 
     # Qwen3-TTS models
     try:

@@ -98,6 +98,23 @@ class PaddleOCREngine(OCREngine):
                 cls._last_error = None
                 logger.info(f"PaddleOCR config changed: device={device} layout={use_layout}")
 
+
+    @classmethod
+    def release_resources(cls) -> None:
+        """Release cached PaddleOCR instance and attempt framework cache cleanup."""
+        cls._ocr_instance = None
+        cls._init_error = None
+        cls._smoke_test_passed = False
+        cls._smoke_test_warning = ""
+        cls._last_error = None
+        try:
+            import paddle
+
+            if hasattr(paddle.device.cuda, "empty_cache"):
+                paddle.device.cuda.empty_cache()
+        except Exception:
+            pass
+
     @classmethod
     def run_paddle_ocr(cls, image_path: str, lang: str = "japan") -> list[dict[str, Any]]:
         """PaddleOCR 3.x 対応の単一呼び出し口."""
