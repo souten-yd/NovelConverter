@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Voice Presets – NovelConverter{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/">ホーム</a> / Voice Presets</div>
+
+<div class="page-header">
+  <h1>🎛️ Voice Presets</h1>
+  <button class="btn btn-primary" onclick="openCreateForm()">+ 新規作成</button>
+</div>
+
+<p class="text-muted">共通ボイス設定をプリセットとして管理します。話者マッピング画面から選択できます。</p>
+
+<div class="card" style="padding:12px;margin-bottom:12px;display:none" id="presetFormCard">
+  <h3 id="formTitle" style="margin-top:0">新規プリセット</h3>
+  <input type="hidden" id="f_preset_id">
+  <div class="form-grid">
+    <label>名前<input class="input" id="f_name" placeholder="例: 元気な女性ボイス"></label>
+    <label>エンジン
+      <select class="input" id="f_engine_type">
+        <option value="custom">custom</option>
+        <option value="design">design</option>
+        <option value="base">base</option>
+      </select>
+    </label>
+  </div>
+  <label>説明<textarea class="input" id="f_description" rows="2"></textarea></label>
+  <label>Synthesis Params (JSON)
+    <textarea class="input" id="f_synthesis" rows="10">{"language":"ja","speaker_name":"Aria","instruct":"明るく自然に","speed":1.0}</textarea>
+  </label>
+  <label>Reference Metadata (JSON)
+    <textarea class="input" id="f_reference" rows="4">{}</textarea>
+  </label>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+    <button class="btn btn-primary" onclick="savePreset()">保存</button>
+    <button class="btn btn-outline" onclick="closeForm()">キャンセル</button>
+  </div>
+</div>
+
+<div id="presetList"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let presets = [];
+
+function esc(s){return String(s||'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));}
+
+async function loadPresets() {
+  const r = await fetch('/api/voice-presets');
+  presets = r.ok ? await r.json() : [];
+  renderPresets();
+}
+
+function renderPresets() {
+  const list = document.getElementById('presetList');
+  if (!presets.length) {
+    list.innerHTML = '<div class="card" style="padding:12px">まだプリセットがありません。</div>';
+    return;
+  }
+  list.innerHTML = presets.map(p => `
+    <div class="card" style="padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
+        <div>
+          <strong>${esc(p.name)}</strong>
+          <span class="badge badge-created" style="margin-left:6px">${esc(p.engine_type)}</span>
+          <div class="text-muted" style="font-size:0.85em">${esc(p.description || '')}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-outline btn-sm" onclick="editPreset('${p.preset_id}')">編集</button>
+          <button class="btn btn-outline btn-sm" onclick="previewPreset('${p.preset_id}')">試聴再生成</button>
+          <button class="btn btn-outline btn-sm" onclick="playPreset('${p.preset_id}')">再生</button>
+          <button class="btn btn-outline btn-sm" onclick="deletePreset('${p.preset_id}')">削除</button>
+        </div>
+      </div>
+      <details style="margin-top:8px">
+        <summary style="cursor:pointer">詳細JSON</summary>
+        <pre style="white-space:pre-wrap">${esc(JSON.stringify(p.synthesis_params || {}, null, 2))}</pre>
+      </details>
+      <audio id="audio-${p.preset_id}" controls style="width:100%;margin-top:8px;display:none"></audio>
+    </div>
+  `).join('');
+}
+
+function openCreateForm() {
+  document.getElementById('presetFormCard').style.display = '';
+  document.getElementById('formTitle').textContent = '新規プリセット';
+  document.getElementById('f_preset_id').value = '';
+  document.getElementById('f_name').value = '';
+  document.getElementById('f_description').value = '';
+}
+function closeForm() { document.getElementById('presetFormCard').style.display = 'none'; }
+
+function editPreset(id) {
+  const p = presets.find(x => x.preset_id === id);
+  if (!p) return;
+  document.getElementById('presetFormCard').style.display = '';
+  document.getElementById('formTitle').textContent = 'プリセット編集';
+  document.getElementById('f_preset_id').value = p.preset_id;
+  document.getElementById('f_name').value = p.name || '';
+  document.getElementById('f_description').value = p.description || '';
+  document.getElementById('f_engine_type').value = p.engine_type || 'custom';
+  document.getElementById('f_synthesis').value = JSON.stringify(p.synthesis_params || {}, null, 2);
+  document.getElementById('f_reference').value = JSON.stringify(p.reference_metadata || {}, null, 2);
+}
+
+async function savePreset() {
+  const id = document.getElementById('f_preset_id').value;
+  let synthesis_params, reference_metadata;
+  try {
+    synthesis_params = JSON.parse(document.getElementById('f_synthesis').value || '{}');
+    reference_metadata = JSON.parse(document.getElementById('f_reference').value || '{}');
+  } catch (e) {
+    alert('JSON形式が不正です: ' + e.message);
+    return;
+  }
+
+  const body = {
+    name: document.getElementById('f_name').value || '無題プリセット',
+    description: document.getElementById('f_description').value || '',
+    engine_type: document.getElementById('f_engine_type').value,
+    synthesis_params,
+    reference_metadata,
+  };
+
+  const url = id ? `/api/voice-presets/${id}` : '/api/voice-presets';
+  const method = id ? 'PUT' : 'POST';
+  const r = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  if (!r.ok) {
+    const d = await r.json().catch(()=>({}));
+    alert('保存失敗: ' + (d.detail || r.status));
+    return;
+  }
+  closeForm();
+  await loadPresets();
+}
+
+async function deletePreset(id) {
+  if (!confirm('このプリセットを削除しますか？')) return;
+  const r = await fetch(`/api/voice-presets/${id}`, {method:'DELETE'});
+  if (!r.ok) { alert('削除失敗'); return; }
+  await loadPresets();
+}
+
+async function previewPreset(id) {
+  const text = prompt('試聴テキストを入力', 'こんにちは、ボイスプリセットの試聴です。');
+  if (text === null) return;
+  const r = await fetch(`/api/voice-presets/${id}/preview`, {
+    method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text})
+  });
+  const d = await r.json().catch(()=>({}));
+  if (!r.ok) { alert('再生成失敗: ' + (d.detail || r.status)); return; }
+  const audio = document.getElementById(`audio-${id}`);
+  if (audio) {
+    audio.src = d.preview_url + '?t=' + Date.now();
+    audio.style.display = '';
+    audio.play().catch(()=>{});
+  }
+  await loadPresets();
+}
+
+function playPreset(id) {
+  const p = presets.find(x => x.preset_id === id);
+  if (!p || !p.sample_audio_path) {
+    alert('試聴音声がありません。先に「試聴再生成」を実行してください。');
+    return;
+  }
+  const fname = p.sample_audio_path.split('/').pop();
+  const audio = document.getElementById(`audio-${id}`);
+  if (audio) {
+    audio.src = `/voice-presets/samples/${fname}?t=` + Date.now();
+    audio.style.display = '';
+    audio.play().catch(()=>{});
+  }
+}
+
+loadPresets();
+</script>
+{% endblock %}

@@ -44,6 +44,7 @@ def _migrate_columns(eng) -> None:
         ("segments", "needs_review",      "INTEGER DEFAULT 0"),
         ("segments", "monologue_subtype", "TEXT"),
         ("segments", "rule_log",          "TEXT DEFAULT '[]'"),
+        ("voice_profiles", "preset_id",   "TEXT"),
     ]
     with eng.connect() as conn:
         for table, col, col_def in migrations:

@@ -72,6 +72,7 @@ class SpeakerOut(BaseModel):
 # ── VoiceProfile ──────────────────────────────────────────────────────────────
 
 class VoiceProfileCreate(BaseModel):
+    preset_id: Optional[str] = None
     worker_type: str = "custom"
     model_name: Optional[str] = None
     preset_name: Optional[str] = None
@@ -91,6 +92,32 @@ class VoiceProfileCreate(BaseModel):
 class VoiceProfileOut(VoiceProfileCreate):
     id: str
     speaker_id: str
+
+    model_config = {"from_attributes": True}
+
+
+class VoicePresetCreate(BaseModel):
+    name: str
+    description: str = ""
+    engine_type: str = "custom"
+    synthesis_params: Dict[str, Any] = Field(default_factory=dict)
+    reference_metadata: Dict[str, Any] = Field(default_factory=dict)
+    sample_audio_path: Optional[str] = None
+
+
+class VoicePresetUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    engine_type: Optional[str] = None
+    synthesis_params: Optional[Dict[str, Any]] = None
+    reference_metadata: Optional[Dict[str, Any]] = None
+    sample_audio_path: Optional[str] = None
+
+
+class VoicePresetOut(VoicePresetCreate):
+    preset_id: str
+    created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 

@@ -6,6 +6,7 @@
 <div class="page-header">
   <h1>話者ごとの音声設定</h1>
   <div class="header-actions">
+    <a href="/voice-presets" class="btn btn-outline">🎛️ Presets管理</a>
     <button class="btn btn-primary" onclick="saveAllMappings()">すべて保存</button>
     <a href="/projects/{{ project.id }}/render" class="btn btn-outline">次: 音声生成 →</a>
   </div>
@@ -28,6 +29,16 @@
 
   <div class="voice-card-body">
     <div class="form-grid">
+      <label>Voice Preset
+        <select class="input vm-field" data-field="preset_id" onchange="applyPresetToCard(this)">
+          <option value="">未選択（手入力）</option>
+          {% for p in voice_presets %}
+          <option value="{{ p.preset_id }}" {{ 'selected' if vp and vp.preset_id == p.preset_id }}>
+            {{ p.name }} ({{ p.engine_type }})
+          </option>
+          {% endfor %}
+        </select>
+      </label>
       <label>ワーカー
         <select class="input vm-worker" data-field="worker_type">
           <option value="custom" {{ 'selected' if not vp or vp.worker_type == 'custom' }}>custom</option>
@@ -87,6 +98,14 @@
 {% block scripts %}
 <script>
 const projectId = '{{ project.id }}';
+const voicePresets = {
+  {% for p in voice_presets %}
+  '{{ p.preset_id }}': {
+    engine_type: {{ p.engine_type | tojson }},
+    synthesis_params: {{ (p.synthesis_params or {}) | tojson }}
+  },
+  {% endfor %}
+};
 
 function getCardData(card) {
   const speakerId = card.dataset.speakerId;
@@ -101,6 +120,29 @@ function getCardData(card) {
     if (data.profile[f] !== undefined) data.profile[f] = parseFloat(data.profile[f]) || 0;
   });
   return data;
+}
+
+function applyPresetToCard(selectEl) {
+  const presetId = selectEl.value;
+  if (!presetId) return;
+  const card = selectEl.closest('.voice-card');
+  const preset = voicePresets[presetId];
+  if (!card || !preset) return;
+  const synth = preset.synthesis_params || {};
+  const setField = (field, value) => {
+    const el = card.querySelector(`[data-field="${field}"]`);
+    if (el && value !== undefined && value !== null) el.value = value;
+  };
+  setField('worker_type', preset.engine_type || 'custom');
+  setField('speaker_name', synth.speaker_name || '');
+  setField('instruct', synth.instruct || '');
+  setField('voice_description', synth.voice_description || '');
+  setField('reference_audio_path', synth.reference_audio_path || '');
+  setField('reference_text', synth.reference_text || '');
+  setField('speed', synth.speed ?? 1.0);
+  setField('pause_ms_before', synth.pause_ms_before ?? 0);
+  setField('pause_ms_after', synth.pause_ms_after ?? 300);
+  setField('volume_gain_db', synth.volume_gain_db ?? 0.0);
 }
 
 async function saveAllMappings() {
