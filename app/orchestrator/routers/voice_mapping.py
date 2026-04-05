@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.shared.database import get_db
-from app.shared.models import Segment, Speaker, VoiceProfile
+from app.shared.models import Segment, Speaker, VoiceProfile, VoicePreset
 from app.shared.paths import get_data_dir
 from app.shared.schemas import SpeakerOut, VoiceMappingBatch, VoiceProfileOut
 from app.shared.logger import get_logger
@@ -62,6 +62,28 @@ def set_voice_mappings(
             .first()
         )
         profile_data = entry.profile.model_dump()
+        preset_id = profile_data.get("preset_id")
+        if preset_id:
+            preset = db.get(VoicePreset, preset_id)
+            if not preset:
+                raise HTTPException(status_code=404, detail=f"Voice preset {preset_id} not found")
+            synth = preset.synthesis_params or {}
+            profile_data["worker_type"] = preset.engine_type
+            profile_data["speaker_name"] = synth.get("speaker_name")
+            profile_data["instruct"] = synth.get("instruct")
+            profile_data["voice_description"] = synth.get("voice_description")
+            profile_data["reference_audio_path"] = synth.get("reference_audio_path")
+            profile_data["reference_text"] = synth.get("reference_text")
+            if "language" in synth:
+                profile_data["language"] = synth["language"]
+            if "speed" in synth:
+                profile_data["speed"] = synth["speed"]
+            if "pause_ms_before" in synth:
+                profile_data["pause_ms_before"] = synth["pause_ms_before"]
+            if "pause_ms_after" in synth:
+                profile_data["pause_ms_after"] = synth["pause_ms_after"]
+            if "volume_gain_db" in synth:
+                profile_data["volume_gain_db"] = synth["volume_gain_db"]
         if vp:
             for k, v in profile_data.items():
                 setattr(vp, k, v)

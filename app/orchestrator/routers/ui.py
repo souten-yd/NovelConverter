@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.shared.database import get_db
-from app.shared.models import Project, Segment, Speaker, RenderJob, Artifact, VoiceProfile, CharacterMaster
+from app.shared.models import Project, Segment, Speaker, RenderJob, Artifact, VoiceProfile, CharacterMaster, VoicePreset
 from app.shared.paths import get_data_dir
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
@@ -102,9 +102,10 @@ def voice_mapping_page(project_id: str, request: Request, db: Session = Depends(
     for sp in speakers:
         vp = sp.voice_profiles[0] if sp.voice_profiles else None
         speaker_profiles.append({"speaker": sp, "profile": vp})
+    presets = db.query(VoicePreset).order_by(VoicePreset.updated_at.desc()).all()
     return templates.TemplateResponse(
         request, "voice_mapping.html",
-        {"project": project, "speaker_profiles": speaker_profiles},
+        {"project": project, "speaker_profiles": speaker_profiles, "voice_presets": presets},
     )
 
 
@@ -191,6 +192,19 @@ def stream_voice_preview(speaker_id: str, filename: str):
     return FileResponse(str(audio_path), media_type="audio/wav")
 
 
+@router.get("/voice-presets/samples/{filename}")
+def stream_voice_preset_sample(filename: str):
+    audio_path = get_data_dir() / "voice_presets" / "samples" / filename
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Preset sample not found")
+    return FileResponse(str(audio_path), media_type="audio/wav")
+
+
+@router.get("/voice-presets", response_class=HTMLResponse)
+def voice_presets_page(request: Request):
+    return templates.TemplateResponse(request, "voice_presets.html", {})
+
+
 @router.get("/projects/{project_id}/ocr_viewer", response_class=HTMLResponse)
 def ocr_viewer_page(project_id: str, request: Request, db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
@@ -212,7 +226,8 @@ def voice_studio_page(project_id: str, request: Request, db: Session = Depends(g
     for sp in speakers:
         vp = sp.voice_profiles[0] if sp.voice_profiles else None
         speaker_profiles.append({"speaker": sp, "profile": vp})
+    presets = db.query(VoicePreset).order_by(VoicePreset.updated_at.desc()).all()
     return templates.TemplateResponse(
         request, "voice_studio.html",
-        {"project": project, "speaker_profiles": speaker_profiles},
+        {"project": project, "speaker_profiles": speaker_profiles, "voice_presets": presets},
     )

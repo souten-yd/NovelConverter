@@ -73,6 +73,7 @@
           <div id="panelSpeakerMeta" class="text-muted" style="font-size:0.85em"></div>
         </div>
         <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+          <a href="/voice-presets" class="btn btn-outline btn-sm">🎛️ Presets管理</a>
           <button class="btn btn-outline btn-sm" onclick="suggestVoice()" id="btnSuggest" disabled>
             ✨ AI音声提案
           </button>
@@ -80,6 +81,23 @@
       </div>
       <!-- AI suggestions area -->
       <div id="suggestArea" style="display:none;margin-top:12px"></div>
+    </div>
+
+    <!-- Worker type tabs -->
+    <div class="card" style="margin-top:12px;padding:14px">
+      <h3 style="margin:0 0 10px;font-size:14px">プリセット</h3>
+      <div class="vds-field">
+        <label>Voice Preset</label>
+        <select id="f_preset_id" class="input" onchange="onPresetChange(); markDirty()">
+          <option value="">未選択（手入力を使用）</option>
+          {% for p in voice_presets %}
+          <option value="{{ p.preset_id }}">{{ p.name }} ({{ p.engine_type }})</option>
+          {% endfor %}
+        </select>
+        <div class="text-muted" style="font-size:0.8em;margin-top:4px">
+          既存の手入力パラメータは後方互換で保持されます。段階的にプリセット選択中心へ移行できます。
+        </div>
+      </div>
     </div>
 
     <!-- Worker type tabs -->
@@ -327,7 +345,19 @@ const speakerProfiles = {
       pause_ms_before: {{ item.profile.pause_ms_before }},
       pause_ms_after: {{ item.profile.pause_ms_after }},
       volume_gain_db: {{ item.profile.volume_gain_db }},
+      preset_id: {{ (item.profile.preset_id or '') | tojson }},
     }{% else %}null{% endif %},
+  },
+  {% endfor %}
+};
+
+const voicePresets = {
+  {% for p in voice_presets %}
+  '{{ p.preset_id }}': {
+    preset_id: {{ p.preset_id | tojson }},
+    name: {{ p.name | tojson }},
+    engine_type: {{ p.engine_type | tojson }},
+    synthesis_params: {{ (p.synthesis_params or {}) | tojson }},
   },
   {% endfor %}
 };
@@ -382,6 +412,7 @@ function selectSpeaker(speakerId, speakerName) {
   setVal('f_pause_before', profile?.pause_ms_before ?? 0);
   setVal('f_pause_after', profile?.pause_ms_after ?? 300);
   setVal('f_volume_db', profile?.volume_gain_db ?? 0);
+  setVal('f_preset_id', profile?.preset_id || '');
 
   if (profile?.reference_audio_path) {
     const fname = profile.reference_audio_path.split('/').pop();
@@ -428,6 +459,25 @@ function updateCharCount() {
   const desc = document.getElementById('f_voice_description')?.value || '';
   const el = document.getElementById('descCharCount');
   if (el) el.textContent = desc.length + '文字';
+}
+
+function onPresetChange() {
+  const presetId = document.getElementById('f_preset_id')?.value || '';
+  if (!presetId) return;
+  const preset = voicePresets[presetId];
+  if (!preset) return;
+  const synth = preset.synthesis_params || {};
+  switchWorkerTab(preset.engine_type || 'custom', false);
+  setVal('f_speaker_name', synth.speaker_name || '');
+  setVal('f_instruct', synth.instruct || '');
+  setVal('f_voice_description', synth.voice_description || '');
+  setVal('f_reference_audio_path', synth.reference_audio_path || '');
+  setVal('f_reference_text', synth.reference_text || '');
+  if (synth.speed !== undefined) setSlider('f_speed', synth.speed, 'speedVal');
+  if (synth.pause_ms_before !== undefined) setVal('f_pause_before', synth.pause_ms_before);
+  if (synth.pause_ms_after !== undefined) setVal('f_pause_after', synth.pause_ms_after);
+  if (synth.volume_gain_db !== undefined) setVal('f_volume_db', synth.volume_gain_db);
+  updateCharCount();
 }
 
 // ── AI voice suggestion ───────────────────────────────────────────────────────
@@ -597,6 +647,7 @@ function clearPreviewAudio() {
 function buildVoiceBody() {
   return {
     worker_type: currentWorkerType,
+    preset_id: document.getElementById('f_preset_id')?.value || null,
     language: 'ja',
     speaker_name: document.getElementById('f_speaker_name')?.value || null,
     instruct: document.getElementById('f_instruct')?.value || null,

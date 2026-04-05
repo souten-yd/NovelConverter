@@ -101,6 +101,7 @@ class VoiceProfile(Base):
 
     id = Column(String, primary_key=True, default=_uuid)
     speaker_id = Column(String, ForeignKey("speakers.id"), nullable=False)
+    preset_id = Column(String, ForeignKey("voice_presets.preset_id"), nullable=True)
     worker_type = Column(String, default="custom")  # base/custom/design
     model_name = Column(String, nullable=True)
     preset_name = Column(String, nullable=True)
@@ -119,6 +120,23 @@ class VoiceProfile(Base):
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
     speaker = relationship("Speaker", back_populates="voice_profiles")
+    preset = relationship("VoicePreset", back_populates="voice_profiles")
+
+
+class VoicePreset(Base):
+    __tablename__ = "voice_presets"
+
+    preset_id = Column(String, primary_key=True, default=_uuid)
+    name = Column(String, nullable=False)
+    description = Column(Text, default="")
+    engine_type = Column(String, default="custom")  # base/custom/design
+    synthesis_params = Column(JSON, default=dict)
+    reference_metadata = Column(JSON, default=dict)
+    sample_audio_path = Column(String, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    voice_profiles = relationship("VoiceProfile", back_populates="preset")
 
 
 class RenderJob(Base):
