@@ -33,13 +33,10 @@ pillow>=10.0.0
 pytesseract>=0.3.10
 
 # ── PaddleOCR ─────────────────────────────────────────────────────────────────
-# paddlepaddle-gpu is installed separately in the Dockerfile RUN block
-# (version must match the CUDA version; see Dockerfile for details)
-# Pinned to tested compatible versions.
-# If ConvertPirAttribute2RuntimeAttribute errors persist with paddlepaddle 3.3.1,
-# downgrade paddlepaddle to 3.2.2 (see Dockerfile comment).
-paddleocr==3.4.0
-paddlex==3.4.3
+# Installed in dedicated OCR venv (/opt/venvs/ocr) from Dockerfile:
+#   - paddlepaddle-gpu==3.2.2 (official cu126 index)
+#   - paddleocr==3.4.0
+#   - paddlex==3.4.3
 
 # ── Qwen-VL local inference ───────────────────────────────────────────────────
 # transformers / torch already included above; qwen-vl-utils adds vision helpers

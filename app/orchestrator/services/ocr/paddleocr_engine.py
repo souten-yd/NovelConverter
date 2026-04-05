@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import logging
+import os
+import site
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -9,6 +12,26 @@ from app.orchestrator.services.ocr.base import OCREngine
 from app.shared.logger import get_logger
 
 logger = get_logger("ocr.paddleocr")
+
+_OCR_VENV_PATH = Path(os.environ.get("OCR_VENV_PATH", "/opt/venvs/ocr"))
+_PADDLE_WHEEL_INDEX = os.environ.get("PADDLE_WHEEL_INDEX", "cu126")
+_BASE_IMAGE_CUDA = os.environ.get("BASE_IMAGE_CUDA", "12.8")
+
+
+def _ensure_ocr_venv_site_packages() -> None:
+    """Inject OCR venv site-packages into current interpreter import path."""
+    if not _OCR_VENV_PATH.exists():
+        return
+    py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    site_dir = _OCR_VENV_PATH / "lib" / py_ver / "site-packages"
+    if not site_dir.exists():
+        return
+    site_path = str(site_dir)
+    if site_path not in sys.path:
+        site.addsitedir(site_path)
+
+
+_ensure_ocr_venv_site_packages()
 
 
 class _WarnOnce:
@@ -54,6 +77,7 @@ class PaddleOCREngine(OCREngine):
     _smoke_test_passed: bool = False
     _smoke_test_warning: str = ""
     _last_error: Optional[str] = None
+    _runtime_reason: str = ""
 
     @classmethod
     def configure(cls, device: str = "gpu:0", use_layout: bool = False) -> None:
@@ -104,6 +128,12 @@ class PaddleOCREngine(OCREngine):
         if missing:
             return False, ", ".join(missing)
 
+        diag = self._get_paddle_diag()
+        if not diag["compiled_with_cuda"]:
+            cls_reason = "paddlepaddle-gpu not active"
+            PaddleOCREngine._runtime_reason = cls_reason
+            return False, cls_reason
+
         # If init already failed in this process, report the cached error.
         if PaddleOCREngine._init_error is not None:
             return False, (
@@ -146,6 +176,7 @@ class PaddleOCREngine(OCREngine):
         kwargs: dict[str, Any] = {
             "lang": paddle_lang,
             "device": cls._resolved_device,
+            "enable_hpi": False,
         }
         # 3.x の正式設定キーのみを利用（未対応環境でも安全に無視されるよう最小限）
         if cls._use_layout and not force_no_layout:
@@ -174,6 +205,14 @@ class PaddleOCREngine(OCREngine):
         cls._smoke_test_passed = False
         cls._smoke_test_warning = ""
         cls._last_error = None
+        cls._runtime_reason = ""
+
+        paddle_diag = cls._get_paddle_diag()
+        if not paddle_diag["compiled_with_cuda"]:
+            cls._init_error = "paddlepaddle-gpu not active"
+            cls._last_error = cls._init_error
+            cls._runtime_reason = cls._init_error
+            raise RuntimeError(cls._init_error)
 
         from paddleocr import PaddleOCR
 
@@ -311,19 +350,26 @@ class PaddleOCREngine(OCREngine):
             paddlex_version = getattr(paddlex, "__version__", "unknown")
         except Exception:
             pass
+        basic_ocr = bool(cls._smoke_test_passed and cls._ocr_instance is not None)
         return {
             "paddleocr_version": version,
             "paddlepaddle_version": paddle_version,
             "paddlex_version": paddlex_version,
             "cuda_compiled": cuda_compiled,
+            "compiled_with_cuda": cuda_compiled,
             "device": device,
-            "available": cls._init_error is None,
+            "available": cls._init_error is None and cuda_compiled,
+            "degraded": not cuda_compiled,
+            "reason": cls._runtime_reason or ("paddlepaddle-gpu not active" if not cuda_compiled else ""),
             "configured_device": cls._device,
             "resolved_device": cls._resolved_device,
             "initialized": cls._ocr_instance is not None,
             "smoke_test_passed": cls._smoke_test_passed,
             "smoke_test_warning": cls._smoke_test_warning,
             "last_error": cls._last_error or cls._init_error,
+            "base_image_cuda": _BASE_IMAGE_CUDA,
+            "paddle_wheel_index": _PADDLE_WHEEL_INDEX,
+            "basic_ocr": basic_ocr,
         }
 
     @staticmethod
@@ -339,20 +385,31 @@ class PaddleOCREngine(OCREngine):
         try:
             import paddle
 
-            cuda_ok = getattr(paddle, "is_compiled_with_cuda", lambda: False)()
+            cuda_ok = bool(getattr(paddle, "is_compiled_with_cuda", lambda: False)())
             if not cuda_ok:
-                logger.warning(
-                    "PaddleOCR requested GPU device but PaddlePaddle is CPU build. "
-                    "Falling back to cpu."
-                )
-                return "cpu"
+                raise RuntimeError("paddlepaddle-gpu not active")
             return requested_device
         except Exception as exc:
-            logger.warning(
-                f"Could not verify CUDA capability for requested device '{requested_device}': {exc}. "
-                "Falling back to cpu."
-            )
-            return "cpu"
+            raise RuntimeError(
+                f"Could not activate requested Paddle device '{requested_device}': {exc}"
+            ) from exc
+
+    @staticmethod
+    def _get_paddle_diag() -> dict[str, Any]:
+        diag = {
+            "paddle_version": "unknown",
+            "compiled_with_cuda": False,
+            "device": "unknown",
+        }
+        try:
+            import paddle
+
+            diag["paddle_version"] = getattr(paddle, "__version__", "unknown")
+            diag["compiled_with_cuda"] = bool(paddle.is_compiled_with_cuda())
+            diag["device"] = str(paddle.device.get_device())
+        except Exception:
+            pass
+        return diag
 
     @staticmethod
     def _normalize_predict_result(result: Any) -> list[dict[str, Any]]:

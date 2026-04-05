@@ -162,7 +162,12 @@ PYCHECK
 
 # ── PaddleOCR diagnostics ─────────────────────────────────────────────────────
 echo "[entrypoint] PaddleOCR diagnostics:"
-python3 - <<'PADDLECHECK'
+OCR_PYTHON="${OCR_PYTHON:-/opt/venvs/ocr/bin/python}"
+if [ ! -x "${OCR_PYTHON}" ]; then
+    echo "[entrypoint] WARNING: OCR venv python missing at ${OCR_PYTHON}; fallback to python3"
+    OCR_PYTHON="python3"
+fi
+"${OCR_PYTHON}" - <<'PADDLECHECK'
 import sys
 try:
     import paddleocr
@@ -206,13 +211,26 @@ try:
     print(f"  [info]    show_log accepted: {has_show_log}")
 except Exception as e:
     print(f"  [info]    Could not inspect PaddleOCR signature: {e}")
+
+status = {
+    "base image cuda": "12.8",
+    "paddle wheel index": "cu126",
+    "compiled_with_cuda": False,
+    "basic_ocr": False,
+}
+try:
+    import paddle
+    status["compiled_with_cuda"] = bool(paddle.is_compiled_with_cuda())
+except Exception:
+    pass
+print(f"  [status]  {status}")
 PADDLECHECK
 
 # ── PaddleOCR engine smoke test ───────────────────────────────────────────────
 # Runs in a subprocess so _init_error state does NOT leak into the server process.
 echo "[entrypoint] PaddleOCR engine smoke test:"
 cd "${APP_DIR:-/workspace/NovelConverter}" 2>/dev/null || true
-python3 - <<'PADDLESMOKE'
+"${OCR_PYTHON}" - <<'PADDLESMOKE'
 import sys
 try:
     from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
@@ -226,6 +244,7 @@ try:
             print(f"  [ok]      PaddleOCR engine initialised ({reason})")
             print(f"  [info]    initialized={st['initialized']} smoke_test_passed={st['smoke_test_passed']} warning={st['smoke_test_warning'] or '-'}")
             print(f"  [info]    last_error={st['last_error'] or '-'}")
+            print(f"  [status]  {{'base image cuda': '{st.get('base_image_cuda')}', 'paddle wheel index': '{st.get('paddle_wheel_index')}', 'compiled_with_cuda': {st.get('compiled_with_cuda')}, 'basic_ocr': {st.get('basic_ocr')}}}")
         except Exception as init_exc:
             print(f"  [FAILED]  PaddleOCR init error: {init_exc}", file=sys.stderr)
     else:
