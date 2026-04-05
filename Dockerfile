@@ -143,14 +143,26 @@ RUN pip install --no-cache-dir -r requirements_docker.txt
 
 # ── NDLOCR-Lite (vendored upstream checkout at fixed commit) ─────────────────
 ARG NDLOCR_LITE_REPO=https://github.com/ndl-lab/ndlocr-lite.git
-ARG NDLOCR_LITE_COMMIT
-RUN test -n "${NDLOCR_LITE_COMMIT}" \
-    && git clone --filter=blob:none ${NDLOCR_LITE_REPO} /opt/ndlocr-lite \
-    && git -C /opt/ndlocr-lite checkout ${NDLOCR_LITE_COMMIT} \
-    && test -f /opt/ndlocr-lite/src/ocr.py \
-    && test "$(find /opt/ndlocr-lite/src/model -maxdepth 1 -type f -name '*.onnx' | wc -l)" -eq 4 \
-    && test -f /opt/ndlocr-lite/src/config/ndl.yaml \
-    && test -f /opt/ndlocr-lite/src/config/NDLmoji.yaml
+ARG NDLOCR_LITE_COMMIT=master
+RUN set -eux; \
+    commit="${NDLOCR_LITE_COMMIT:-master}"; \
+    if [ -z "${commit}" ]; then commit=master; fi; \
+    echo "NDLOCR_LITE_REPO=${NDLOCR_LITE_REPO}"; \
+    echo "NDLOCR_LITE_COMMIT_RESOLVED=${commit}"; \
+    printf '%s' "${commit}" > /tmp/ndlocr_commit.txt
+RUN set -eux; \
+    commit="$(cat /tmp/ndlocr_commit.txt)"; \
+    rm -rf /opt/ndlocr-lite; \
+    git clone --filter=blob:none "${NDLOCR_LITE_REPO}" /opt/ndlocr-lite; \
+    git -C /opt/ndlocr-lite checkout "${commit}"; \
+    git -C /opt/ndlocr-lite rev-parse HEAD
+RUN set -eux; \
+    test -f /opt/ndlocr-lite/src/ocr.py; \
+    find /opt/ndlocr-lite/src/model -maxdepth 1 -type f -name '*.onnx' -print; \
+    test "$(find /opt/ndlocr-lite/src/model -maxdepth 1 -type f -name '*.onnx' | wc -l)" -eq 4; \
+    ls -la /opt/ndlocr-lite/src/config; \
+    test -f /opt/ndlocr-lite/src/config/ndl.yaml; \
+    test -f /opt/ndlocr-lite/src/config/NDLmoji.yaml
 
 # ── Application code ──────────────────────────────────────────────────────────
 COPY app/        ${APP_DIR}/app/
