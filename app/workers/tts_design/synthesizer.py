@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import subprocess
 import struct
+import sys
 import wave
 from pathlib import Path
 from typing import Optional
@@ -64,6 +66,14 @@ class Qwen3DesignSynthesizer:
         self._model_dir = self.MODEL_ID
         self._used_cpu_fallback = False
         self._cpu_fallback_reason: Optional[str] = None
+        self._backend_name = "qwen3-design"
+        self._python_executable = sys.executable
+        self._sys_path = list(sys.path)
+        self._import_status: dict[str, str] = {}
+        self._pip_show_qwen_tts = ""
+        self._tokenizer_path = os.environ.get("TTS_TOKENIZER_PATH", "Qwen/Qwen3-TTS-Tokenizer-12Hz")
+        self._dtype = "unknown"
+        self._attention_backend = "unknown"
         self._load()
 
     def _resolve_model_path(self) -> str:
@@ -77,10 +87,10 @@ class Qwen3DesignSynthesizer:
 
     def _load(self):
         try:
-            import sys
             import transformers
             import qwen_tts
             import torch
+            import torchaudio
             from transformers import AutoProcessor
             from qwen_tts import Qwen3TTSModel
 
@@ -89,10 +99,21 @@ class Qwen3DesignSynthesizer:
             self._used_cpu_fallback = False
             self._cpu_fallback_reason = None
 
-            logger.info(f"sys.executable={sys.executable}")
+            self._python_executable = sys.executable
+            self._sys_path = list(sys.path)
+            self._import_status = self._collect_import_status()
+            self._pip_show_qwen_tts = self._collect_pip_show()
+            self._dtype = "float16" if selected_device == "cuda" else "float32"
+            self._attention_backend = "sdpa" if selected_device == "cuda" else "eager"
+
+            logger.info(f"sys.executable={self._python_executable}")
+            logger.info(f"sys.path={self._sys_path}")
+            logger.info(f"import_status={self._import_status}")
+            logger.info("pip show qwen-tts:\n%s", self._pip_show_qwen_tts or "(empty)")
             logger.info(f"transformers.__version__={transformers.__version__}")
             logger.info(f"qwen_tts.__file__={qwen_tts.__file__}")
             logger.info(f"torch.__version__={torch.__version__}")
+            logger.info(f"torchaudio.__version__={torchaudio.__version__}")
             logger.info(f"torch.version.cuda={torch.version.cuda}")
             logger.info(f"torch.cuda.is_available()={torch.cuda.is_available()}")
             logger.info(f"selected_device={selected_device}")
@@ -142,7 +163,13 @@ class Qwen3DesignSynthesizer:
                 self._used_cpu_fallback,
             )
         except Exception as e:
-            self._load_error = str(e)
+            err_msg = str(e)
+            if "No module named 'qwen_tts'" in err_msg:
+                err_msg = (
+                    "Qwen3-TTS backend import failed: No module named 'qwen_tts'. "
+                    "The worker environment is missing the qwen-tts package."
+                )
+            self._load_error = err_msg
             logger.exception("Failed to load Qwen3-TTS Design")
             self._model = None
             self._processor = None
@@ -156,11 +183,46 @@ class Qwen3DesignSynthesizer:
 
     def get_runtime_status(self) -> dict:
         return {
+            "backend_name": self._backend_name,
+            "python_executable": self._python_executable,
+            "sys_path": self._sys_path,
+            "import_status": self._import_status,
+            "pip_show_qwen_tts": self._pip_show_qwen_tts,
             "device": self._device,
             "model_dir": self._model_dir,
+            "model_root_exists": Path(self._model_dir).exists() if "/" in self._model_dir else False,
+            "tokenizer_path": self._tokenizer_path,
+            "tokenizer_exists": Path(self._tokenizer_path).exists() if "/" in self._tokenizer_path else False,
+            "selected_dtype": self._dtype,
+            "selected_attention_backend": self._attention_backend,
             "cpu_fallback": self._used_cpu_fallback,
             "cpu_fallback_reason": self._cpu_fallback_reason,
         }
+
+    def _collect_import_status(self) -> dict[str, str]:
+        modules = ("qwen_tts", "transformers", "torch", "torchaudio")
+        status: dict[str, str] = {}
+        for module in modules:
+            try:
+                __import__(module)
+                status[module] = "ok"
+            except Exception as e:  # pragma: no cover - diagnostic only
+                status[module] = f"ng: {e}"
+        return status
+
+    def _collect_pip_show(self) -> str:
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "show", "qwen-tts"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            return output.strip()
+        except Exception as e:  # pragma: no cover - diagnostic only
+            return f"failed to run pip show: {e}"
 
     def available_models(self) -> list:
         return [self.MODEL_ID]
@@ -173,7 +235,7 @@ class Qwen3DesignSynthesizer:
         if not self.is_loaded():
             return SynthesizeResponse(
                 success=False,
-                error=f"Model not loaded: {self._load_error or 'unknown error'}",
+                error=self._load_error or "Model not loaded: unknown error",
                 worker_id="qwen3-design",
             )
 

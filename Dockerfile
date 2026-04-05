@@ -140,6 +140,7 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTH
 WORKDIR ${APP_DIR}
 COPY requirements_docker.txt .
 RUN pip install --no-cache-dir -r requirements_docker.txt
+RUN python3 -c "import qwen_tts, torch, transformers; print('build preflight: qwen_tts/torch/transformers ok')"
 
 # ── PaddleOCR dedicated venv (GPU) ───────────────────────────────────────────
 # Base image is CUDA 12.8, but Paddle is installed from the official cu126

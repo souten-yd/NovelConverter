@@ -27,6 +27,7 @@ transformers>=4.44.0
 accelerate>=0.30.0
 sentencepiece>=0.2.0
 protobuf>=4.25.0
+qwen-tts
 
 # ── OCR (image ingestion from ZIP/RAR archives) ───────────────────────────────
 pillow>=10.0.0

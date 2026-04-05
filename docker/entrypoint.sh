@@ -160,6 +160,43 @@ if not all_ok:
           file=sys.stderr)
 PYCHECK
 
+echo "[entrypoint] TTS backend preflight diagnostics:"
+python3 - <<'TTSCHECK'
+import os
+import subprocess
+import sys
+
+print(f"  [info]    sys.executable={sys.executable}")
+print(f"  [info]    first sys.path entries={sys.path[:5]}")
+for mod in ("qwen_tts", "torch", "transformers", "torchaudio"):
+    try:
+        __import__(mod)
+        print(f"  [ok]      import {mod}")
+    except Exception as e:
+        print(f"  [MISSING] import {mod} failed: {e}", file=sys.stderr)
+
+try:
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "show", "qwen-tts"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    show_out = ((result.stdout or "") + (result.stderr or "")).strip()
+    print("  [info]    pip show qwen-tts:")
+    print(show_out if show_out else "  (no output)")
+except Exception as e:
+    print(f"  [info]    pip show qwen-tts failed: {e}")
+
+if os.environ.get("TTS_BASE_USE_REAL", "false").lower() == "true":
+    try:
+        import qwen_tts, torch, transformers  # noqa: F401
+        print("  [ok]      runtime required imports for real TTS are available")
+    except Exception as e:
+        raise SystemExit(f"  [FATAL]   real TTS is enabled but import preflight failed: {e}")
+TTSCHECK
+
 # ── PaddleOCR diagnostics ─────────────────────────────────────────────────────
 echo "[entrypoint] PaddleOCR diagnostics:"
 OCR_PYTHON="${OCR_PYTHON:-/opt/venvs/ocr/bin/python}"
