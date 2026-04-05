@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import threading
 import time
 import uuid
@@ -15,7 +16,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.shared.database import get_db, SessionLocal
-from app.shared.models import Project, ProcessingJob, Segment
+from app.shared.models import Project, ProcessingJob, Segment, RenderJob, Speaker
 from app.shared.schemas import ProjectCreate, ProjectOut
 from app.shared.logger import get_logger
 from app.shared.paths import get_data_dir
@@ -37,6 +38,83 @@ def _get_project_or_404(project_id: str, db: Session) -> Project:
     return p
 
 
+def _mark_running_jobs_aborted(project_id: str, db: Session) -> dict[str, int]:
+    """Mark project jobs that are currently running as aborted/interrupted."""
+    now = datetime.utcnow()
+
+    processing_running = (
+        db.query(ProcessingJob)
+        .filter(ProcessingJob.project_id == project_id, ProcessingJob.status == "running")
+        .all()
+    )
+    for job in processing_running:
+        job.status = "aborted"
+        job.stage = "aborted"
+        job.stage_label = "中断"
+        job.error_message = "Project deleted while job was running."
+        job.error_category = "cancelled"
+        job.finished_at = now
+
+    render_running = (
+        db.query(RenderJob)
+        .filter(RenderJob.project_id == project_id, RenderJob.status == "running")
+        .all()
+    )
+    for job in render_running:
+        job.status = "aborted"
+        job.error_message = "Project deleted while render was running."
+        job.finished_at = now
+
+    return {
+        "processing_jobs_aborted": len(processing_running),
+        "render_jobs_aborted": len(render_running),
+    }
+
+
+def _safe_rmtree(path: Path, deleted_paths: list[str]) -> bool:
+    if not path.exists():
+        return False
+    shutil.rmtree(path, ignore_errors=True)
+    deleted_paths.append(str(path))
+    return True
+
+
+def _delete_project_files(project_id: str, db: Session) -> dict:
+    """Delete project-owned files (OCR/temp/preview/render/cache artifacts)."""
+    data_dir = get_data_dir()
+    project_dir = _projects_dir() / project_id
+    outputs_dir = data_dir / "outputs" / project_id
+
+    deleted_paths: list[str] = []
+
+    # 1) OCR中間生成物 / speaker mapping cache / temp (project-scoped)
+    _safe_rmtree(project_dir, deleted_paths)
+
+    # 2) preview / render成果物
+    _safe_rmtree(outputs_dir, deleted_paths)
+
+    # 3) voice preview temp files (speaker単位)
+    speaker_ids = [
+        sp.id for sp in db.query(Speaker.id).filter(Speaker.project_id == project_id).all()
+    ]
+    voice_preview_root = data_dir / "temp" / "voice_preview"
+    for speaker_id in speaker_ids:
+        _safe_rmtree(voice_preview_root / speaker_id, deleted_paths)
+
+    # 4) Additional project temp/cache conventions (best-effort)
+    temp_root = data_dir / "temp"
+    optional_paths = [
+        temp_root / project_id,
+        temp_root / f"project_{project_id}",
+        temp_root / f"speaker_mapping_{project_id}",
+        temp_root / f"speaker_mapping_cache_{project_id}",
+    ]
+    for path in optional_paths:
+        _safe_rmtree(path, deleted_paths)
+
+    return {"deleted_path_count": len(deleted_paths), "deleted_paths": deleted_paths}
+
+
 @router.post("", response_model=ProjectOut, status_code=201)
 def create_project(body: ProjectCreate, db: Session = Depends(get_db)):
     project = Project(id=str(uuid.uuid4()), name=body.name, description=body.description)
@@ -55,6 +133,36 @@ def list_projects(db: Session = Depends(get_db)):
 @router.get("/{project_id}", response_model=ProjectOut)
 def get_project(project_id: str, db: Session = Depends(get_db)):
     return _get_project_or_404(project_id, db)
+
+
+@router.delete("/{project_id}")
+def delete_project(project_id: str, db: Session = Depends(get_db)):
+    """Delete project metadata and all generated artifacts/files."""
+    project = _get_project_or_404(project_id, db)
+
+    # Stop/cancel running jobs first so background workers can observe interruption state.
+    aborted = _mark_running_jobs_aborted(project_id, db)
+
+    # Delete files before DB metadata so we can still inspect related ids/paths if needed.
+    file_cleanup = _delete_project_files(project_id, db)
+
+    db.delete(project)
+    db.commit()
+
+    logger.info(
+        "Deleted project %s (aborted processing=%s render=%s, deleted_paths=%s)",
+        project_id,
+        aborted["processing_jobs_aborted"],
+        aborted["render_jobs_aborted"],
+        file_cleanup["deleted_path_count"],
+    )
+
+    return {
+        "deleted": True,
+        "project_id": project_id,
+        **aborted,
+        **file_cleanup,
+    }
 
 
 @router.patch("/{project_id}")
@@ -233,7 +341,7 @@ def _complete_job(job_id: str, result_data: dict) -> None:
     bg_db = SessionLocal()
     try:
         job = bg_db.get(ProcessingJob, job_id)
-        if job:
+        if job and job.status == "running":
             job.status = "completed"
             job.stage = "complete"
             job.stage_label = "完了"
@@ -252,7 +360,7 @@ def _fail_job(job_id: str, error_message: str, error_category: str = "unknown") 
     bg_db = SessionLocal()
     try:
         job = bg_db.get(ProcessingJob, job_id)
-        if job:
+        if job and job.status == "running":
             job.status = "failed"
             job.stage = "failed"
             job.stage_label = "失敗"

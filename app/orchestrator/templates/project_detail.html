@@ -5,7 +5,33 @@
 
 <div class="page-header">
   <h1>{{ project.name }}</h1>
-  <span class="badge badge-{{ project.status }}">{{ project.status }}</span>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <span class="badge badge-{{ project.status }}">{{ project.status }}</span>
+    <button class="btn btn-sm btn-danger" onclick="openDeleteProjectModal()">プロジェクト削除</button>
+  </div>
+</div>
+
+<div id="deleteProjectModal" class="modal hidden">
+  <div class="modal-overlay" onclick="closeDeleteProjectModal()"></div>
+  <div class="modal-box">
+    <h2>プロジェクト削除</h2>
+    <p style="font-size:0.92em;color:#b91c1c">
+      この操作は取り消せません。DBメタデータに加えて、OCR中間生成物・preview/render成果物・speaker mapping cache・temp files も削除されます。
+    </p>
+    <p style="font-size:0.9em;color:#334155;margin-top:8px">対象: {{ project.name }}</p>
+    <label style="margin-top:12px;display:block">
+      <input type="checkbox" id="deleteConfirmStep1">
+      生成物を含むすべての関連ファイルが削除されることを理解しました
+    </label>
+    <label style="display:block;margin-top:10px">
+      <span style="font-size:0.85em;color:#64748b">確認のため「DELETE」と入力してください</span>
+      <input id="deleteConfirmText" type="text" class="input" placeholder="DELETE">
+    </label>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeDeleteProjectModal()">キャンセル</button>
+      <button id="deleteProjectExecBtn" class="btn btn-danger" onclick="deleteProject()" disabled>削除する</button>
+    </div>
+  </div>
 </div>
 
 <!-- Model Status Panel -->
@@ -184,6 +210,44 @@
 {% block scripts %}
 <script>
 const projectId = '{{ project.id }}';
+
+function openDeleteProjectModal() {
+  document.getElementById('deleteProjectModal').classList.remove('hidden');
+  document.getElementById('deleteConfirmStep1').checked = false;
+  document.getElementById('deleteConfirmText').value = '';
+  syncDeleteButtonState();
+  document.getElementById('deleteConfirmText').focus();
+}
+
+function closeDeleteProjectModal() {
+  document.getElementById('deleteProjectModal').classList.add('hidden');
+}
+
+function syncDeleteButtonState() {
+  const checked = document.getElementById('deleteConfirmStep1').checked;
+  const typed = document.getElementById('deleteConfirmText').value.trim().toUpperCase() === 'DELETE';
+  document.getElementById('deleteProjectExecBtn').disabled = !(checked && typed);
+}
+
+document.getElementById('deleteConfirmStep1')?.addEventListener('change', syncDeleteButtonState);
+document.getElementById('deleteConfirmText')?.addEventListener('input', syncDeleteButtonState);
+
+async function deleteProject() {
+  const btn = document.getElementById('deleteProjectExecBtn');
+  btn.disabled = true;
+  const res = await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+  if (res.ok) {
+    window.location.href = '/';
+    return;
+  }
+  btn.disabled = false;
+  let msg = '削除に失敗しました';
+  try {
+    const data = await res.json();
+    if (data?.detail) msg = data.detail;
+  } catch (_) {}
+  alert(msg);
+}
 
 // ── Error message mapping ───────────────────────────────────────────────────
 const ERROR_LABELS = {

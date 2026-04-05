@@ -54,6 +54,8 @@ h3 { font-size: 15px; font-weight: 600; }
 .btn-secondary:hover { background: #cbd5e1; }
 .btn-outline { background: transparent; color: var(--primary); border-color: var(--primary); }
 .btn-outline:hover { background: #eff2ff; }
+.btn-danger { background: #dc2626; color: #fff; border-color: #dc2626; }
+.btn-danger:hover { background: #b91c1c; border-color: #b91c1c; }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
 .btn-lg { padding: 10px 20px; font-size: 15px; }
 .btn-audio { background: #f0fdf4; color: #166534; border-color: #86efac; }

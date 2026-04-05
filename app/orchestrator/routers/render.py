@@ -72,6 +72,11 @@ def _render_background(project_id: str, job_id: str, skip_done: bool = True):
         failed = 0
 
         for seg in segments:
+            db.refresh(job)
+            if job.status == "aborted":
+                logger.info(f"Render job {job_id} aborted")
+                break
+
             # Skip already-done if resume
             if skip_done and seg.render_status == "done" and seg.output_audio_path:
                 if Path(seg.output_audio_path).exists():
@@ -118,10 +123,11 @@ def _render_background(project_id: str, job_id: str, skip_done: bool = True):
             job.failed_segments = failed
             db.commit()
 
-        job.status = "done"
+        if job.status != "aborted":
+            job.status = "done"
         job.finished_at = datetime.utcnow()
         db.commit()
-        logger.info(f"Render job {job_id} done: {done} ok, {failed} failed")
+        logger.info(f"Render job {job_id} ended: status={job.status} {done} ok, {failed} failed")
     except Exception as e:
         logger.error(f"Render job {job_id} crashed: {e}")
         job = db.get(RenderJob, job_id)

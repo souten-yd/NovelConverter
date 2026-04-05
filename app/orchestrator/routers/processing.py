@@ -269,6 +269,10 @@ def segment_speakers_endpoint(
 
             # Save results to DB
             _update_seg_job(bg_db, job_id, "saving", "結果保存中", 90, 0, total_segs)
+            existing = bg_db.get(ProcessingJob, job_id)
+            if not existing or existing.status != "running":
+                bg_db.rollback()
+                return
             ann_map = {a.order_index: a for a in annotated}
 
             segs = (
@@ -316,7 +320,7 @@ def segment_speakers_endpoint(
 
             # Complete job
             job_rec = bg_db.get(ProcessingJob, job_id)
-            if job_rec:
+            if job_rec and job_rec.status == "running":
                 job_rec.status = "completed"
                 job_rec.stage = "complete"
                 job_rec.stage_label = "完了"
@@ -533,7 +537,7 @@ def preview_diarization(
             segments_out = _annotated_to_preview_dicts(annotated)
 
             job_rec = bg_db.get(ProcessingJob, job_id)
-            if job_rec:
+            if job_rec and job_rec.status == "running":
                 job_rec.status = "completed"
                 job_rec.stage = "complete"
                 job_rec.stage_label = "完了"
