@@ -27,6 +27,9 @@ from app.orchestrator.services.ocr.models import (
 )
 
 logger = get_logger("ocr.ruby_detector")
+RUBY_EXPORT_LBR = "["
+RUBY_EXPORT_SEP = "|"
+RUBY_EXPORT_RBR = "]"
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +185,7 @@ def detect_ruby_candidates(
                 ruby_text=ruby_tok.text,
                 base_bbox=best_base.bbox.to_list(),
                 ruby_bbox=ruby_tok.bbox.to_list(),
+                reading_source="detected_ruby",
                 confidence=min(best_score, 1.0),
             ))
             matched_count += 1
@@ -215,7 +219,7 @@ def detect_ruby_candidates(
 # ---------------------------------------------------------------------------
 
 def generate_ruby_text(plain: str, attachments: list[RubyAttachment]) -> str:
-    """Generate annotated text like ``漢字(かんじ)``."""
+    """Generate machine-readable ruby text like ``[漢字|かんじ]``."""
     if not attachments:
         return plain
     result = plain
@@ -225,9 +229,12 @@ def generate_ruby_text(plain: str, attachments: list[RubyAttachment]) -> str:
     for att in sorted_atts:
         if att.base_text in replaced:
             continue
-        annotated = f"{att.base_text}({att.ruby_text})"
-        # Replace only first occurrence
-        result = result.replace(att.base_text, annotated, 1)
+        idx = result.find(att.base_text)
+        if idx < 0:
+            continue
+        annotated = f"{RUBY_EXPORT_LBR}{att.base_text}{RUBY_EXPORT_SEP}{att.ruby_text}{RUBY_EXPORT_RBR}"
+        result = result[:idx] + annotated + result[idx + len(att.base_text):]
+        att.ruby_span = (idx, idx + len(annotated))
         replaced.add(att.base_text)
     return result
 
@@ -261,10 +268,10 @@ def build_structured_lines(
     if not tokens:
         return []
 
-    # Build a lookup: base_text → ruby_text
-    ruby_map: dict[str, str] = {}
+    # Build a lookup: base_text → attachment
+    ruby_map: dict[str, RubyAttachment] = {}
     for att in attachments:
-        ruby_map[att.base_text] = att.ruby_text
+        ruby_map[att.base_text] = att
 
     # Group tokens by (block_order, line_order)
     line_groups: dict[tuple[int, int], list[OCRToken]] = {}
@@ -284,10 +291,15 @@ def build_structured_lines(
         for t in group_tokens:
             segments.append(LineSegment(seg_type="base", text=t.text))
             if t.text in ruby_map:
+                att = ruby_map[t.text]
                 segments.append(LineSegment(
                     seg_type="ruby",
-                    text=ruby_map[t.text],
+                    text=att.ruby_text,
                     parent=t.text,
+                    surface=t.text,
+                    reading=att.ruby_text,
+                    reading_source=att.reading_source,
+                    ruby_span=att.ruby_span,
                 ))
 
         lines.append(StructuredLine(

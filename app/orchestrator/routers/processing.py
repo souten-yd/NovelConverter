@@ -18,6 +18,7 @@ from app.shared.models import Project, ProcessingJob, Segment, Speaker, VoicePro
 from app.shared.schemas import SegmentOut, SpeakerOut
 from app.shared.logger import get_logger
 from app.orchestrator.services.preprocessor import preprocess, _normalize_whitespace, _split_chapters, _split_body
+from app.orchestrator.services.text_normalizer import extract_ruby_metadata, prepare_tts_text
 from app.orchestrator.services.speaker_segmenter import (
     segment_speakers,
     segment_speakers_enhanced,
@@ -143,6 +144,9 @@ def preprocess_project(project_id: str, db: Session = Depends(get_db)):
             order_index=rs.order_index,
             raw_text=rs.text,
             normalized_text=rs.text,
+            ruby_text=rs.text,
+            ruby_metadata=extract_ruby_metadata(rs.text),
+            tts_text=prepare_tts_text(rs.text),
             segment_type="unknown",
             predicted_speaker="unknown",
             confidence=0.0,

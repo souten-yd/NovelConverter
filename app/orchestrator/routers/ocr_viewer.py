@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.shared.database import get_db, SessionLocal
 from app.shared.logger import get_logger
 from app.shared.models import OcrPage, OcrPageVersion, ProcessingJob, Project
+from app.orchestrator.services.text_normalizer import prepare_tts_text
 
 logger = get_logger("router.ocr_viewer")
 router = APIRouter(prefix="/api/projects", tags=["ocr_viewer"])
@@ -248,6 +249,8 @@ def get_ocr_page(
         "layout_complexity": page.layout_complexity or 0,
         "plain_text": page.plain_text or "",
         "ruby_text": page.ruby_text or "",
+        "reading_priority_text": prepare_tts_text(page.ruby_text or page.plain_text or ""),
+        "ruby_export_format": "[surface|reading]",
         "ruby_html": page.ruby_html or "",
         "ruby_attachments": page.ruby_attachments or [],
         "structured_lines": page.structured_lines or [],

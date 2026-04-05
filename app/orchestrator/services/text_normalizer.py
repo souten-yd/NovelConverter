@@ -7,7 +7,7 @@ both for cleaner segmentation and for persisting NormalizationLog rows.
 Rules (applied in order):
   1. quotemark_unify   – 全角/異体引用符を 「」『』 に統一
   2. ellipsis_dash_norm – 三点リーダ・ダッシュ・長音の正規化
-  3. ruby_removal      – ルビ（《》｜ 形式・HTMLタグ）除去
+  3. ruby_removal      – 表示用のルビ（《》｜ 形式・HTMLタグ）除去
   4. ocr_noise_removal – OCRゴミ行（孤立1文字・罫線記号）除去
   5. page_join         – ページ区切りマーカー周辺のセリフ連結
 """
@@ -20,6 +20,7 @@ from typing import Callable, List, Optional, Tuple
 from app.shared.logger import get_logger
 
 logger = get_logger("text_normalizer")
+RUBY_READING_EXPORT = re.compile(r"\[([^\|\]\n]+)\|([^\]\n]+)\]")
 
 
 # ── Data structures ───────────────────────────────────────────────────────────
@@ -133,6 +134,21 @@ def _remove_ruby(text: str) -> str:
     return text
 
 
+def _to_tts_reading(text: str) -> str:
+    """Convert supported ruby notations into reading-first text for TTS."""
+    # [漢字|かんじ] / [surface|reading]
+    text = RUBY_READING_EXPORT.sub(r"\2", text)
+    # HTML ruby
+    text = re.sub(r'<ruby>([^<]+)<rt>([^<]*)</rt></ruby>', r'\2', text, flags=re.IGNORECASE)
+    text = _RUBY_HTML2.sub('', text)
+    # ｜漢字《かんじ》 and 漢字《かんじ》
+    text = re.sub(r'｜([^《\s]+)《([^》]+)》', r'\2', text)
+    text = re.sub(r'([一-龥々〆ヵヶ]+)《([ぁ-んァ-ンー]+)》', r'\2', text)
+    # 漢字(かんじ) style
+    text = _RUBY_PAREN.sub(r'\2', text)
+    return text
+
+
 # ── Rule 4: OCRノイズ除去 ─────────────────────────────────────────────────────
 
 # Lines that are just a single CJK or ASCII symbol (OCR artefact)
@@ -208,3 +224,33 @@ def normalize_japanese_text(raw_text: str) -> NormalizationResult:
         )
 
     return NormalizationResult(text=text, logs=logs)
+
+
+def normalize_japanese_display_text(raw_text: str) -> NormalizationResult:
+    """Display-oriented normalization (ruby is removed from visible text)."""
+    return normalize_japanese_text(raw_text)
+
+
+def prepare_tts_text(raw_text: str) -> str:
+    """Prepare speech text while preserving ruby readings as pronunciation hints."""
+    text = _unify_quote_marks(raw_text)
+    text = _normalize_ellipsis_dash(text)
+    text = _to_tts_reading(text)
+    text = _remove_ocr_noise(text)
+    text = _join_page_crossing_dialogue(text)
+    return text
+
+
+def extract_ruby_metadata(text: str) -> list[dict]:
+    """Extract ruby metadata from [surface|reading] text."""
+    items: list[dict] = []
+    for m in RUBY_READING_EXPORT.finditer(text):
+        items.append(
+            {
+                "surface": m.group(1),
+                "reading": m.group(2),
+                "reading_source": "export_ruby",
+                "ruby_span": [m.start(), m.end()],
+            }
+        )
+    return items

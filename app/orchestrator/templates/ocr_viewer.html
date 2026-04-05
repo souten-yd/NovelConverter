@@ -17,6 +17,7 @@
     <select id="displayMode" class="input" style="min-width:180px" onchange="onModeChange()">
       <option value="text_only">本��のみ</option>
       <option value="ruby_parallel" selected>ルビ平行表示</option>
+      <option value="reading_priority">読み優先表示</option>
       <option value="debug_overlay">デバッグ表示</option>
     </select>
   </div>
@@ -322,6 +323,18 @@ function renderPage(page) {
         </table>
       </details></div>`;
     }
+  } else if (mode === 'reading_priority') {
+    container.innerHTML = meta + `<div class="parallel-view">
+      <div class="pane">
+        <div class="pane-header">本文表示</div>
+        <div class="pane-text">${escHtml(page.plain_text || '(テキストなし)')}</div>
+      </div>
+      <div class="pane">
+        <div class="pane-header">読み優先表示 (TTS入力)</div>
+        <div class="pane-text">${escHtml(page.reading_priority_text || page.plain_text || '(テキストなし)')}</div>
+        <div style="font-size:0.75em;color:#64748b;margin-top:8px">Ruby export: ${escHtml(page.ruby_export_format || '[surface|reading]')}</div>
+      </div>
+    </div>`;
   } else if (mode === 'debug_overlay') {
     let debugHtml = meta;
     debugHtml += `<div class="pane"><div class="pane-header">デバッグ情報</div>`;
