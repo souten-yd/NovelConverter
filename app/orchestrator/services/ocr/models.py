@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
+from app.orchestrator.services.ocr.numpy_safety import deep_to_py_scalars, safe_float, safe_int
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +54,7 @@ class PageJob:
         return {
             "source_doc_id": self.source_doc_id,
             "source_name": self.source_name,
-            "page_index": self.page_index,
+            "page_index": safe_int(self.page_index) or 0,
             "image_path": self.image_path,
         }
 
@@ -87,17 +88,28 @@ class BBox:
         return ((self.x_min + self.x_max) / 2, (self.y_min + self.y_max) / 2)
 
     def to_list(self) -> list[float]:
-        return [self.x_min, self.y_min, self.x_max, self.y_max]
+        return [
+            safe_float(self.x_min) or 0.0,
+            safe_float(self.y_min) or 0.0,
+            safe_float(self.x_max) or 0.0,
+            safe_float(self.y_max) or 0.0,
+        ]
 
     @classmethod
     def from_list(cls, coords: list[float]) -> "BBox":
-        return cls(coords[0], coords[1], coords[2], coords[3])
+        return cls(
+            safe_float(coords[0]) or 0.0,
+            safe_float(coords[1]) or 0.0,
+            safe_float(coords[2]) or 0.0,
+            safe_float(coords[3]) or 0.0,
+        )
 
     @classmethod
     def from_polygon(cls, points: list[list[float]]) -> "BBox":
         """Create bbox from PaddleOCR polygon [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]."""
-        xs = [p[0] for p in points]
-        ys = [p[1] for p in points]
+        py_points = deep_to_py_scalars(points)
+        xs = [safe_float(p[0]) or 0.0 for p in py_points]
+        ys = [safe_float(p[1]) or 0.0 for p in py_points]
         return cls(min(xs), min(ys), max(xs), max(ys))
 
 
@@ -118,9 +130,9 @@ class OCRToken:
             "text": self.text,
             "bbox": self.bbox.to_list(),
             "confidence": round(self.confidence, 3),
-            "block_order": self.block_order,
-            "line_order": self.line_order,
-            "token_order": self.token_order,
+            "block_order": safe_int(self.block_order) or 0,
+            "line_order": safe_int(self.line_order) or 0,
+            "token_order": safe_int(self.token_order) or 0,
             "is_ruby_candidate": self.is_ruby_candidate,
             "orientation": self.orientation,
         }
@@ -269,9 +281,9 @@ class OCRPageResult:
 
     def to_dict(self) -> dict:
         return {
-            "page_index": self.page_index,
+            "page_index": safe_int(self.page_index) or 0,
             "engine": self.engine,
-            "elapsed_ms": self.elapsed_ms,
+            "elapsed_ms": safe_int(self.elapsed_ms) or 0,
             "ruby_detected": self.ruby_detected,
             "ruby_confidence": round(self.ruby_confidence, 3),
             "ruby_mode": self.ruby_mode,

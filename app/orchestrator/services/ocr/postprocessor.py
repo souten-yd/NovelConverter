@@ -19,6 +19,7 @@ from app.orchestrator.services.ocr.models import (
     ScheduleDecision,
 )
 from app.orchestrator.services.ocr.ruby_detector import enrich_with_ruby
+from app.orchestrator.services.ocr.numpy_safety import safe_int
 
 logger = get_logger("ocr.postprocessor")
 
@@ -124,14 +125,14 @@ def postprocess(
     decision_map = {d.page_index: d for d in decisions}
 
     # 1. Stable sort by page_index
-    results.sort(key=lambda r: r.page_index)
+    results.sort(key=lambda r: safe_int(r.page_index) or 0)
 
     for result in results:
         if result.status == "error":
             continue
 
         # Copy layout complexity from scheduling decision
-        dec = decision_map.get(result.page_index)
+        dec = decision_map.get(safe_int(result.page_index) or 0)
         if dec:
             result.layout_complexity = dec.layout_complexity
 
