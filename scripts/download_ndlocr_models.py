@@ -42,6 +42,7 @@ _MODEL_ARCHIVES: list[dict] = [
 
 # Extensions that indicate a valid model file
 _MODEL_EXTENSIONS = {".pth", ".pt", ".onnx", ".pdparams", ".bin", ".npz"}
+_AUX_EXTENSIONS = {".json", ".yaml", ".yml"}
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +106,13 @@ def _count_model_files(directory: Path) -> int:
     )
 
 
+def _count_aux_files(directory: Path) -> int:
+    return sum(
+        1 for p in directory.rglob("*")
+        if p.is_file() and p.suffix.lower() in _AUX_EXTENSIONS
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -115,10 +123,14 @@ def main() -> int:
 
     # Check if models already present
     existing = _count_model_files(model_dir)
-    if existing > 0:
-        print(f"  {existing} model file(s) already present. Skipping download.")
-        print("  To force re-download, delete the directory and re-run this script.")
+    existing_aux = _count_aux_files(model_dir) if model_dir.exists() else 0
+    if existing > 0 and existing_aux > 0:
+        print(f"  already present, skipping download (models={existing}, aux={existing_aux})")
         return 0
+    if model_dir.exists():
+        print("  incomplete, re-downloading")
+    else:
+        print("  missing, downloading")
 
     # Clean up incomplete directory
     if model_dir.exists() and not any(model_dir.iterdir()):
@@ -159,13 +171,14 @@ def main() -> int:
 
     # Validate result
     final_count = _count_model_files(model_dir)
-    if final_count > 0:
-        print(f"\nSuccess: {final_count} model file(s) in {model_dir}")
+    aux_count = _count_aux_files(model_dir)
+    if final_count > 0 and aux_count > 0:
+        print(f"\nSuccess: models={final_count}, aux={aux_count} in {model_dir}")
         return 0
     elif success:
-        print(f"\nWARNING: Archive extracted but no model files found in {model_dir}")
-        print("  The archive may have a nested directory structure.")
-        print("  Please check the contents and move model files if needed.")
+        print(f"\nWARNING: Archive extracted but model set is incomplete in {model_dir}")
+        print(f"  model_files={final_count}, aux_files={aux_count}")
+        print("  Expected both weight files and metadata/config files.")
         return 1
     else:
         print(f"\nERROR: Model download failed. Please download manually:")

@@ -118,12 +118,15 @@ def ensure_model(model_key: str) -> Path:
     model_dir = get_model_path(model_key)
 
     if is_model_complete(model_key):
-        logger.info(f"[model_manager] {model_key} already complete at {model_dir}")
+        logger.info(f"[model_manager] {model_key}: already present, skipping download ({model_dir})")
         return model_dir
+
+    state = "incomplete" if model_dir.exists() else "missing"
+    logger.info(f"[model_manager] {model_key}: {state}, {'re-downloading' if state == 'incomplete' else 'downloading'}")
 
     # Remove incomplete directory
     if model_dir.exists():
-        logger.warning(f"[model_manager] {model_key} incomplete at {model_dir}, removing for re-download")
+        logger.warning(f"[model_manager] {model_key}: incomplete, re-downloading ({model_dir})")
         shutil.rmtree(model_dir, ignore_errors=True)
 
     try:
@@ -135,7 +138,7 @@ def ensure_model(model_key: str) -> Path:
         )
 
     repo_id = info["repo_id"]
-    logger.info(f"[model_manager] Downloading {repo_id} to {model_dir}...")
+    logger.info(f"[model_manager] Downloading {repo_id} to {model_dir} ...")
 
     _models_root().mkdir(parents=True, exist_ok=True)
 

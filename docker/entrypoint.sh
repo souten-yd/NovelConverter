@@ -216,13 +216,16 @@ python3 - <<'PADDLESMOKE'
 import sys
 try:
     from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
-    PaddleOCREngine.configure(device="cpu", use_layout=False)
+    PaddleOCREngine.configure(device="gpu:0", use_layout=False)
     engine = PaddleOCREngine()
     available, reason = engine.is_available()
     if available:
         try:
             PaddleOCREngine._init_ocr("japan")
+            st = PaddleOCREngine.get_runtime_status()
             print(f"  [ok]      PaddleOCR engine initialised ({reason})")
+            print(f"  [info]    initialized={st['initialized']} smoke_test_passed={st['smoke_test_passed']} warning={st['smoke_test_warning'] or '-'}")
+            print(f"  [info]    last_error={st['last_error'] or '-'}")
         except Exception as init_exc:
             print(f"  [FAILED]  PaddleOCR init error: {init_exc}", file=sys.stderr)
     else:
@@ -249,7 +252,9 @@ done
 # ── NDLOCR-Lite: model download & diagnostics ─────────────────────────────────
 echo "[entrypoint] NDLOCR-Lite diagnostics:"
 NDLOCR_MODEL_DIR="${NDLOCR_MODEL_DIR:-/workspace/ndlocr_models}"
+NDLOCR_DOWNLOADER="${APP_DIR:-/workspace/NovelConverter}/scripts/download_ndlocr_models.py"
 echo "[entrypoint] NDLOCR model dir: ${NDLOCR_MODEL_DIR}"
+echo "[entrypoint] NDLOCR downloader: ${NDLOCR_DOWNLOADER}"
 
 # Auto-install NDLOCR-Lite when missing (RunPod runtime recovery)
 if ! command -v ndlocr-lite >/dev/null 2>&1 && ! command -v ndlocr >/dev/null 2>&1; then
@@ -293,7 +298,10 @@ if [ -n "${NDLOCR_BIN}" ]; then
     else
         echo "[entrypoint] NDLOCR-Lite: No model files found in ${NDLOCR_MODEL_DIR}."
         echo "[entrypoint]   Attempting automatic model download..."
-        if python3 "${APP_DIR:-/workspace/NovelConverter}/scripts/download_ndlocr_models.py"; then
+        if [ ! -f "${NDLOCR_DOWNLOADER}" ]; then
+            echo "[entrypoint] WARNING: NDLOCR downloader script not found: ${NDLOCR_DOWNLOADER}"
+            model_count=0
+        elif python3 "${NDLOCR_DOWNLOADER}"; then
             model_count=$(find "${NDLOCR_MODEL_DIR}" \( -name "*.pth" -o -name "*.pt" -o -name "*.onnx" -o -name "*.pdparams" -o -name "*.bin" -o -name "*.npz" \) 2>/dev/null | wc -l)
         else
             model_count=0
@@ -304,7 +312,7 @@ if [ -n "${NDLOCR_BIN}" ]; then
         else
             echo "[entrypoint] WARNING: NDLOCR-Lite model download failed or no model files found."
             echo "[entrypoint]   NDLOCR-Lite engine will report unavailable until models are present."
-            echo "[entrypoint]   Manual fallback: python3 ${APP_DIR:-/workspace/NovelConverter}/scripts/download_ndlocr_models.py"
+            echo "[entrypoint]   Manual fallback: python3 ${NDLOCR_DOWNLOADER}"
         fi
     fi
 else
