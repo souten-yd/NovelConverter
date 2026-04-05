@@ -249,75 +249,30 @@ for model_name in PP-LCNet_x1_0_doc_ori PP-ShiTuV2_det PP-ShiTuV2_rec; do
     fi
 done
 
-# ── NDLOCR-Lite: model download & diagnostics ─────────────────────────────────
+# ── NDLOCR-Lite: vendored asset diagnostics ───────────────────────────────────
 echo "[entrypoint] NDLOCR-Lite diagnostics:"
-NDLOCR_MODEL_DIR="${NDLOCR_MODEL_DIR:-/workspace/ndlocr_models}"
-NDLOCR_DOWNLOADER="${APP_DIR:-/workspace/NovelConverter}/scripts/download_ndlocr_models.py"
-echo "[entrypoint] NDLOCR model dir: ${NDLOCR_MODEL_DIR}"
-echo "[entrypoint] NDLOCR downloader: ${NDLOCR_DOWNLOADER}"
+NDLOCR_ROOT="/opt/ndlocr-lite"
+NDLOCR_OCR_PY="${NDLOCR_ROOT}/src/ocr.py"
+NDLOCR_MODEL_DIR="${NDLOCR_ROOT}/src/model"
+NDLOCR_CONFIG_DIR="${NDLOCR_ROOT}/src/config"
 
-# Auto-install NDLOCR-Lite when missing (RunPod runtime recovery)
-if ! command -v ndlocr-lite >/dev/null 2>&1 && ! command -v ndlocr >/dev/null 2>&1; then
-    echo "[entrypoint] NDLOCR-Lite: CLI not found. Attempting runtime install..."
-    if python3 -m pip install --no-cache-dir git+https://github.com/ndl-lab/ndlocr-lite.git; then
-        hash -r
-        if command -v ndlocr-lite >/dev/null 2>&1 || command -v ndlocr >/dev/null 2>&1; then
-            echo "[entrypoint] NDLOCR-Lite: runtime install succeeded"
-        else
-            echo "[entrypoint] WARNING: NDLOCR-Lite runtime install completed but CLI is still missing"
-        fi
-    else
-        echo "[entrypoint] WARNING: NDLOCR-Lite runtime install failed"
-    fi
-fi
-
-NDLOCR_BIN=""
-if command -v ndlocr-lite >/dev/null 2>&1; then
-    NDLOCR_BIN="$(command -v ndlocr-lite)"
-elif command -v ndlocr >/dev/null 2>&1; then
-    NDLOCR_BIN="$(command -v ndlocr)"
-fi
-
-if [ -n "${NDLOCR_BIN}" ]; then
-    echo "[entrypoint] NDLOCR-Lite: CLI found at ${NDLOCR_BIN}"
-
-    # Verify CLI is responsive
-    if "${NDLOCR_BIN}" --help >/dev/null 2>&1; then
-        echo "[entrypoint] NDLOCR-Lite: CLI sanity check passed"
-    else
-        echo "[entrypoint] WARNING: NDLOCR-Lite --help failed – CLI may be broken"
-    fi
-
-    # Ensure model directory exists
-    mkdir -p "${NDLOCR_MODEL_DIR}"
-
-    # Check whether models are already present (any recognised weight file)
-    model_count=$(find "${NDLOCR_MODEL_DIR}" \( -name "*.pth" -o -name "*.pt" -o -name "*.onnx" -o -name "*.pdparams" -o -name "*.bin" -o -name "*.npz" \) 2>/dev/null | wc -l)
-    if [ "${model_count}" -gt 0 ]; then
-        echo "[entrypoint] NDLOCR-Lite: ${model_count} model file(s) already present in ${NDLOCR_MODEL_DIR} – skipping download"
-    else
-        echo "[entrypoint] NDLOCR-Lite: No model files found in ${NDLOCR_MODEL_DIR}."
-        echo "[entrypoint]   Attempting automatic model download..."
-        if [ ! -f "${NDLOCR_DOWNLOADER}" ]; then
-            echo "[entrypoint] WARNING: NDLOCR downloader script not found: ${NDLOCR_DOWNLOADER}"
-            model_count=0
-        elif python3 "${NDLOCR_DOWNLOADER}"; then
-            model_count=$(find "${NDLOCR_MODEL_DIR}" \( -name "*.pth" -o -name "*.pt" -o -name "*.onnx" -o -name "*.pdparams" -o -name "*.bin" -o -name "*.npz" \) 2>/dev/null | wc -l)
-        else
-            model_count=0
-        fi
-
-        if [ "${model_count}" -gt 0 ]; then
-            echo "[entrypoint] NDLOCR-Lite: model download completed (${model_count} file(s))"
-        else
-            echo "[entrypoint] WARNING: NDLOCR-Lite model download failed or no model files found."
-            echo "[entrypoint]   NDLOCR-Lite engine will report unavailable until models are present."
-            echo "[entrypoint]   Manual fallback: python3 ${NDLOCR_DOWNLOADER}"
-        fi
-    fi
+if [ -f "${NDLOCR_OCR_PY}" ]; then
+    echo "[entrypoint] NDLOCR-Lite: ocr.py found (${NDLOCR_OCR_PY})"
 else
-    echo "[entrypoint] WARNING: NDLOCR-Lite CLI not found – NDLOCR-Lite engine will be unavailable"
-    echo "[entrypoint]   To install: pip install git+https://github.com/ndl-lab/ndlocr-lite.git"
+    echo "[entrypoint] WARNING: NDLOCR-Lite: missing ${NDLOCR_OCR_PY}"
+fi
+
+model_count=$(find "${NDLOCR_MODEL_DIR}" -maxdepth 1 -type f -name "*.onnx" 2>/dev/null | wc -l || true)
+if [ "${model_count}" -eq 4 ]; then
+    echo "[entrypoint] NDLOCR-Lite: model onnx count OK (${model_count})"
+else
+    echo "[entrypoint] WARNING: NDLOCR-Lite: expected 4 onnx models, found ${model_count} in ${NDLOCR_MODEL_DIR}"
+fi
+
+if [ -f "${NDLOCR_CONFIG_DIR}/ndl.yaml" ] && [ -f "${NDLOCR_CONFIG_DIR}/NDLmoji.yaml" ]; then
+    echo "[entrypoint] NDLOCR-Lite: config files OK (ndl.yaml, NDLmoji.yaml)"
+else
+    echo "[entrypoint] WARNING: NDLOCR-Lite: missing config files in ${NDLOCR_CONFIG_DIR}"
 fi
 
 if [[ -x "${LLAMA_SERVER_BIN:-}" ]]; then

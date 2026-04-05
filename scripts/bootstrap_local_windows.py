@@ -91,18 +91,11 @@ from app.shared.model_manager import ensure_all_models
 from app.shared.llm_downloader import ensure_llm_model
 from app.shared.runtime_backends import detect_runtime_backends
 from app.shared.runtime_backends import save_runtime_status
-from scripts.download_ndlocr_models import main as ndl_main
 
 print('[bootstrap] Ensuring Qwen3-TTS models...')
 print(ensure_all_models())
 print('[bootstrap] Ensuring LLM GGUF model...')
 print(ensure_llm_model())
-print('[bootstrap] Ensuring NDLOCR models...')
-try:
-    rc = ndl_main()
-    print(f'[bootstrap] NDLOCR download rc={rc}')
-except Exception as e:
-    print(f'[bootstrap] NDLOCR setup warning: {e}')
 status = detect_runtime_backends()
 save_runtime_status(status)
 print('[bootstrap] runtime status=', status)
@@ -113,7 +106,6 @@ print('[bootstrap] runtime status=', status)
     env["MODELS_ROOT"] = str(ROOT / "data" / "models")
     env["CACHE_ROOT"] = str(ROOT / "cache")
     env["HF_HOME"] = str(ROOT / "cache" / "huggingface")
-    env["NDLOCR_MODEL_DIR"] = str(ROOT / "data" / "models" / "ocr" / "ndlocr")
     subprocess.run([str(py), "-c", code], cwd=str(ROOT), env=env, check=True)
 
 
