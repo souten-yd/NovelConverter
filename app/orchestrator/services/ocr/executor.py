@@ -25,6 +25,11 @@ from app.orchestrator.services.ocr.models import (
     PipelineConfig,
     ScheduleDecision,
 )
+from app.orchestrator.services.ocr.numpy_safety import (
+    deep_to_py_scalars,
+    safe_float,
+    safe_int,
+)
 
 logger = get_logger("ocr.executor")
 
@@ -91,7 +96,16 @@ def _run_paddle_ocr(
     except Exception as exc:
         result.status = "error"
         result.error_message = str(exc)
-        logger.warning(f"PaddleOCR failed for page {page_index}: {exc}")
+        logger.exception(
+            "OCR pipeline failed: engine=%s stage=%s image_dtype=%s image_shape=%s bbox_type=%s score_type=%s page=%s",
+            "paddleocr",
+            "engine-call",
+            result.debug.get("image_dtype", "unknown"),
+            result.debug.get("image_shape", "unknown"),
+            "unknown",
+            "unknown",
+            page_index,
+        )
     finally:
         release_lease("paddleocr", reason=lease_reason)
 
@@ -103,10 +117,11 @@ def _populate_tokens_from_paddle(result: OCRPageResult, raw_items: list[dict]) -
     """Extract token-level bounding boxes from PaddleOCR 3.x normalized output."""
     try:
         for line_idx, line_info in enumerate(raw_items):
+            line_info = deep_to_py_scalars(line_info)
             text = str(line_info.get("text", "")).strip()
             if not text:
                 continue
-            conf = float(line_info.get("score", 0.0))
+            conf = safe_float(line_info.get("score", 0.0)) or 0.0
             poly = line_info.get("poly")
             if poly is None:
                 continue
@@ -116,9 +131,17 @@ def _populate_tokens_from_paddle(result: OCRPageResult, raw_items: list[dict]) -
                 bbox=bbox,
                 confidence=conf,
                 block_order=0,
-                line_order=line_idx,
+                line_order=safe_int(line_idx) or 0,
                 token_order=0,
             ))
+        if result.tokens:
+            t0 = result.tokens[0]
+            logger.debug(
+                "Paddle token sample: page=%s bbox_type=%s score_type=%s",
+                result.page_index,
+                type(t0.bbox.x_min).__name__,
+                type(t0.confidence).__name__,
+            )
     except Exception as exc:
         logger.debug(f"Token extraction failed for page {result.page_index}: {exc}")
 
@@ -160,7 +183,16 @@ def _run_ndlocr_lite(
     except Exception as exc:
         result.status = "error"
         result.error_message = str(exc)
-        logger.warning(f"NDLOCR-Lite failed for page {page_index}: {exc}")
+        logger.exception(
+            "OCR pipeline failed: engine=%s stage=%s image_dtype=%s image_shape=%s bbox_type=%s score_type=%s page=%s",
+            "ndlocr_lite",
+            "engine-call",
+            "unknown",
+            "unknown",
+            "unknown",
+            "unknown",
+            page_index,
+        )
 
     result.stop_timer()
     return result
@@ -198,7 +230,16 @@ def _run_fallback(
     except Exception as exc:
         result.status = "error"
         result.error_message = str(exc)
-        logger.warning(f"Fallback OCR failed for page {page_index}: {exc}")
+        logger.exception(
+            "OCR pipeline failed: engine=%s stage=%s image_dtype=%s image_shape=%s bbox_type=%s score_type=%s page=%s",
+            "tesseract",
+            "engine-call",
+            "unknown",
+            "unknown",
+            "unknown",
+            "unknown",
+            page_index,
+        )
 
     result.stop_timer()
     return result
@@ -399,10 +440,11 @@ def execute_ocr(
 
 def _dict_to_page_result(d: dict) -> OCRPageResult:
     """Reconstruct OCRPageResult from a serialized dict."""
+    d = deep_to_py_scalars(d)
     result = OCRPageResult(
-        page_index=d.get("page_index", 0),
+        page_index=safe_int(d.get("page_index", 0)) or 0,
         engine=d.get("engine", ""),
-        elapsed_ms=d.get("elapsed_ms", 0),
+        elapsed_ms=safe_int(d.get("elapsed_ms", 0)) or 0,
         plain_text=d.get("plain_text", ""),
         status=d.get("status", "ok"),
         error_message=d.get("error_message", ""),
@@ -414,10 +456,10 @@ def _dict_to_page_result(d: dict) -> OCRPageResult:
         result.tokens.append(OCRToken(
             text=td["text"],
             bbox=BBox.from_list(td["bbox"]),
-            confidence=td.get("confidence", 0),
-            block_order=td.get("block_order", 0),
-            line_order=td.get("line_order", 0),
-            token_order=td.get("token_order", 0),
-            is_ruby_candidate=td.get("is_ruby_candidate", False),
+            confidence=safe_float(td.get("confidence", 0)) or 0.0,
+            block_order=safe_int(td.get("block_order", 0)) or 0,
+            line_order=safe_int(td.get("line_order", 0)) or 0,
+            token_order=safe_int(td.get("token_order", 0)) or 0,
+            is_ruby_candidate=bool(td.get("is_ruby_candidate", False)),
         ))
     return result

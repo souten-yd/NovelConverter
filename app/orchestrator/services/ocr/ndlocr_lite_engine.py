@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.orchestrator.services.ocr.base import OCREngine
+from app.orchestrator.services.ocr.numpy_safety import normalize_image_for_ocr
 from app.shared.logger import get_logger
 
 logger = get_logger("ocr.ndlocr_lite")
@@ -215,7 +216,28 @@ class NDLOCRLiteEngine(OCREngine):
             output_dir.mkdir()
 
             dest = input_dir / image_path.name
-            shutil.copy2(image_path, dest)
+            try:
+                import numpy as np
+                from PIL import Image
+
+                image = Image.open(image_path)
+                arr = np.asarray(image)
+                pre_min = float(np.nanmin(arr)) if arr.size else 0.0
+                pre_max = float(np.nanmax(arr)) if arr.size else 0.0
+                normalized = normalize_image_for_ocr(arr)
+                logger.debug(
+                    "NDLOCR pre-normalize: dtype=%s shape=%s min=%.3f max=%.3f -> dtype=%s shape=%s",
+                    arr.dtype,
+                    tuple(arr.shape),
+                    pre_min,
+                    pre_max,
+                    normalized.dtype,
+                    tuple(normalized.shape),
+                )
+                Image.fromarray(normalized).save(dest)
+            except Exception as exc:
+                logger.warning(f"NDLOCR image normalize failed; fallback to raw copy: {exc}")
+                shutil.copy2(image_path, dest)
 
             cmd = [
                 py,

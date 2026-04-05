@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.orchestrator.services.ocr.base import OCREngine
+from app.orchestrator.services.ocr.numpy_safety import deep_to_py_scalars, normalize_image_for_ocr
 from app.shared.logger import get_logger
 
 logger = get_logger("ocr.paddleocr")
@@ -50,6 +51,14 @@ def _get_paddleocr_version() -> str:
     try:
         import paddleocr
         return getattr(paddleocr, "__version__", "unknown")
+    except Exception:
+        return "unknown"
+
+
+def _get_numpy_version() -> str:
+    try:
+        import numpy as np
+        return getattr(np, "__version__", "unknown")
     except Exception:
         return "unknown"
 
@@ -118,10 +127,27 @@ class PaddleOCREngine(OCREngine):
     @classmethod
     def run_paddle_ocr(cls, image_path: str, lang: str = "japan") -> list[dict[str, Any]]:
         """PaddleOCR 3.x 対応の単一呼び出し口."""
+        import numpy as np
+        from PIL import Image
+
         cls._init_ocr(lang)
         if cls._ocr_instance is None:
             return []
-        result = cls._ocr_instance.predict(str(image_path))
+        image = Image.open(image_path)
+        image_arr = np.asarray(image)
+        pre_min = float(np.nanmin(image_arr)) if image_arr.size else 0.0
+        pre_max = float(np.nanmax(image_arr)) if image_arr.size else 0.0
+        normalized_image = normalize_image_for_ocr(image_arr)
+        logger.debug(
+            "PaddleOCR pre-normalize: dtype=%s shape=%s min=%.3f max=%.3f -> dtype=%s shape=%s",
+            image_arr.dtype,
+            tuple(image_arr.shape),
+            pre_min,
+            pre_max,
+            normalized_image.dtype,
+            tuple(normalized_image.shape),
+        )
+        result = cls._ocr_instance.predict(normalized_image)
         normalized = cls._normalize_predict_result(result)
         return normalized
 
@@ -369,8 +395,10 @@ class PaddleOCREngine(OCREngine):
             pass
         basic_ocr = bool(cls._smoke_test_passed and cls._ocr_instance is not None)
         return {
+            "env_path": str(_OCR_VENV_PATH),
             "paddleocr_version": version,
             "paddlepaddle_version": paddle_version,
+            "numpy_version": _get_numpy_version(),
             "paddlex_version": paddlex_version,
             "cuda_compiled": cuda_compiled,
             "compiled_with_cuda": cuda_compiled,
@@ -440,6 +468,7 @@ class PaddleOCREngine(OCREngine):
         for item in result:
             if hasattr(item, "res"):
                 item = item.res
+            item = deep_to_py_scalars(item)
             if not isinstance(item, dict):
                 continue
 
@@ -452,7 +481,7 @@ class PaddleOCREngine(OCREngine):
                 normalized.append({
                     "text": str(text),
                     "score": float(score) if score is not None else 0.0,
-                    "poly": poly,
+                    "poly": deep_to_py_scalars(poly),
                 })
 
         return normalized

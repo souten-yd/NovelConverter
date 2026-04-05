@@ -39,6 +39,7 @@ from app.orchestrator.services.ocr.postprocessor import (
     generate_combined_plain_text,
     postprocess,
 )
+from app.orchestrator.services.ocr.numpy_safety import safe_int
 from app.orchestrator.services.ocr.scheduler import schedule_pages
 
 logger = get_logger("ocr.pipeline")
@@ -180,8 +181,8 @@ def run_pipeline(
             )
         for i, page in enumerate(all_results):
             if i < len(page_index_overrides):
-                page.page_index = page_index_overrides[i]
-        all_results.sort(key=lambda p: p.page_index)
+                page.page_index = safe_int(page_index_overrides[i]) or i
+        all_results.sort(key=lambda p: safe_int(p.page_index) or 0)
 
     # Compute stats
     engine_stats = compute_engine_stats(all_results)

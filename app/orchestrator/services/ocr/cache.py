@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.shared.logger import get_logger
+from app.orchestrator.services.ocr.numpy_safety import safe_for_json
 
 logger = get_logger("ocr.cache")
 
@@ -103,8 +104,9 @@ class OCRCache:
         key = _compute_cache_key(image_path, engine, ruby_mode)
         cache_path = self._dir / f"{key}.json"
         try:
+            normalized = safe_for_json(result)
             cache_path.write_text(
-                json.dumps(result, ensure_ascii=False, indent=None),
+                json.dumps(normalized, ensure_ascii=False, indent=None),
                 encoding="utf-8",
             )
             logger.debug(f"Cache stored: {key[:12]}... for {Path(image_path).name}")

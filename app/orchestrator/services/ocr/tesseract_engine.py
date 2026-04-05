@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.orchestrator.services.ocr.base import OCREngine
+from app.orchestrator.services.ocr.numpy_safety import normalize_image_for_ocr
 from app.shared.logger import get_logger
 
 logger = get_logger("ocr.tesseract")
@@ -66,6 +67,21 @@ class TesseractEngine(OCREngine):
 
         try:
             image = Image.open(image_path)
+            import numpy as np
+            arr = np.asarray(image)
+            pre_min = float(np.nanmin(arr)) if arr.size else 0.0
+            pre_max = float(np.nanmax(arr)) if arr.size else 0.0
+            normalized = normalize_image_for_ocr(arr)
+            logger.debug(
+                "Tesseract pre-normalize: dtype=%s shape=%s min=%.3f max=%.3f -> dtype=%s shape=%s",
+                arr.dtype,
+                tuple(arr.shape),
+                pre_min,
+                pre_max,
+                normalized.dtype,
+                tuple(normalized.shape),
+            )
+            image = Image.fromarray(normalized)
             # Upscale small images for better accuracy
             min_dim = 1000
             w, h = image.size
