@@ -266,23 +266,38 @@ class Qwen3BaseSynthesizer:
 
         try:
             import soundfile as sf
-            import torch
             from app.shared.audio_validator import validate_audio_array
 
-            inputs = self._processor(
-                text=req.text,
-                ref_audio=req.reference_audio_path,
-                ref_text=req.reference_text or "",
-                return_tensors="pt",
-            ).to(self._device)
+            use_reusable_prompt = bool((req.extra or {}).get("use_voice_clone_prompt"))
 
-            with torch.no_grad():
-                output = self._model.generate(**inputs)
+            if use_reusable_prompt and hasattr(self._model, "create_voice_clone_prompt") and hasattr(self._model, "generate_voice_clone"):
+                clone_prompt = self._model.create_voice_clone_prompt(
+                    ref_audio=req.reference_audio_path,
+                    ref_text=req.reference_text or "",
+                )
+                output = self._model.generate_voice_clone(
+                    text=req.text,
+                    language=req.language or "ja",
+                    voice_clone_prompt=clone_prompt,
+                )
+            elif hasattr(self._model, "generate_voice_clone"):
+                output = self._model.generate_voice_clone(
+                    text=req.text,
+                    language=req.language or "ja",
+                    ref_audio=req.reference_audio_path,
+                    ref_text=req.reference_text or "",
+                )
+            else:
+                return SynthesizeResponse(
+                    success=False,
+                    error="Loaded qwen-tts model does not support voice clone APIs",
+                    worker_id="qwen3-base",
+                )
 
-            audio_np = output.cpu().numpy().squeeze()
+            audio_np, sample_rate = _extract_first_audio_and_rate(output, default_sample_rate=24000)
 
             # Validate before writing
-            validation = validate_audio_array(audio_np, sample_rate=24000)
+            validation = validate_audio_array(audio_np, sample_rate=sample_rate)
             if not validation.valid:
                 logger.error(
                     f"Audio validation failed: {validation.failure_reason} "
@@ -295,7 +310,7 @@ class Qwen3BaseSynthesizer:
                     worker_id="qwen3-base",
                 )
 
-            sf.write(str(out_path), audio_np, samplerate=24000)
+            sf.write(str(out_path), audio_np, samplerate=sample_rate)
 
             return SynthesizeResponse(
                 success=True,
@@ -324,6 +339,24 @@ def _resolve_output_path(requested: Optional[str], prefix: str) -> Path:
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
     import uuid
     return TEMP_DIR / f"{prefix}_{uuid.uuid4().hex[:8]}.wav"
+
+
+def _extract_first_audio_and_rate(output, default_sample_rate: int = 24000):
+    sample_rate = default_sample_rate
+    wavs = output
+    if isinstance(output, tuple) and len(output) == 2:
+        wavs, sample_rate = output
+    if isinstance(wavs, list):
+        wavs = wavs[0] if wavs else []
+    if hasattr(wavs, "detach"):
+        wavs = wavs.detach()
+    if hasattr(wavs, "cpu"):
+        wavs = wavs.cpu()
+    if hasattr(wavs, "numpy"):
+        wavs = wavs.numpy()
+    if hasattr(wavs, "squeeze"):
+        wavs = wavs.squeeze()
+    return wavs, sample_rate
 
 
 def _estimate_duration(text: str, speed: float = 1.0) -> float:
