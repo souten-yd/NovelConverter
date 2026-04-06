@@ -117,8 +117,8 @@ def _run_paddle_ocr(
 
 def _populate_tokens_from_paddle(result: OCRPageResult, raw_items: list[dict]) -> None:
     """Extract token-level bounding boxes from PaddleOCR 3.x normalized output."""
-    try:
-        for line_idx, line_info in enumerate(raw_items):
+    for line_idx, line_info in enumerate(raw_items):
+        try:
             line_info = deep_to_py_scalars(line_info)
             text = str(line_info.get("text", "")).strip()
             if not text:
@@ -136,16 +136,23 @@ def _populate_tokens_from_paddle(result: OCRPageResult, raw_items: list[dict]) -
                 line_order=safe_int(line_idx) or 0,
                 token_order=0,
             ))
-        if result.tokens:
-            t0 = result.tokens[0]
+        except Exception as exc:
             logger.debug(
-                "Paddle token sample: page=%s bbox_type=%s score_type=%s",
+                "Token extraction skipped for page=%s line=%s due to malformed bbox: %s",
                 result.page_index,
-                type(t0.bbox.x_min).__name__,
-                type(t0.confidence).__name__,
+                line_idx,
+                exc,
             )
-    except Exception as exc:
-        logger.debug(f"Token extraction failed for page {result.page_index}: {exc}")
+            continue
+
+    if result.tokens:
+        t0 = result.tokens[0]
+        logger.debug(
+            "Paddle token sample: page=%s bbox_type=%s score_type=%s",
+            result.page_index,
+            type(t0.bbox.x_min).__name__,
+            type(t0.confidence).__name__,
+        )
 
 
 def _run_ndlocr_lite(

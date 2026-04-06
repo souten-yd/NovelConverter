@@ -21,6 +21,7 @@ WORKER_ID = "tts_worker_base"
 WORKER_TYPE = "base"
 PORT = int(os.environ.get("TTS_BASE_PORT", 8001))
 USE_REAL_MODEL = os.environ.get("TTS_BASE_USE_REAL", "false").lower() == "true"
+PRELOAD_ON_STARTUP = os.environ.get("TTS_BASE_PRELOAD_ON_STARTUP", "false").lower() == "true"
 
 app = FastAPI(title="TTS Worker Base (Voice Clone)", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -41,8 +42,13 @@ def get_synth():
 
 @app.on_event("startup")
 def startup_preflight():
+    if not USE_REAL_MODEL:
+        return
+    if not PRELOAD_ON_STARTUP:
+        logger.info("TTS Base preload disabled (set TTS_BASE_PRELOAD_ON_STARTUP=true to enable eager load).")
+        return
     synth = get_synth()
-    if USE_REAL_MODEL and not synth.is_loaded():
+    if not synth.is_loaded():
         err = synth.get_load_error() if hasattr(synth, "get_load_error") else "unknown error"
         logger.error("TTS Base preflight failed: %s", err)
         raise RuntimeError(f"TTS Base preflight failed: {err}")
@@ -50,11 +56,12 @@ def startup_preflight():
 
 @app.get("/health", response_model=WorkerHealth)
 def health():
+    loaded = _synth.is_loaded() if _synth is not None else False
     return WorkerHealth(
         status="ok",
         worker_id=WORKER_ID,
         worker_type=WORKER_TYPE,
-        model_loaded=get_synth().is_loaded(),
+        model_loaded=loaded,
     )
 
 

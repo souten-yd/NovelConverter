@@ -83,3 +83,25 @@ def test_paddle_predict_result_and_executor_conversion_remove_numpy_scalars() ->
 def test_regression_numpy_int16_bit_length_safe_int() -> None:
     value = np.int16(1024)
     assert safe_int(value).bit_length() == 11
+
+
+def test_populate_tokens_skips_malformed_polygon_but_keeps_valid_items() -> None:
+    page = OCRPageResult(page_index=0, image_path="dummy.png")
+    raw_items = [
+        {"text": "bad", "score": 0.5, "poly": [[1], [2], [3], [4]]},
+        {"text": "good", "score": 0.9, "poly": [[0, 0], [10, 0], [10, 10], [0, 10]]},
+    ]
+    _populate_tokens_from_paddle(page, raw_items)
+    assert len(page.tokens) == 1
+    assert page.tokens[0].text == "good"
+
+
+def test_paddle_normalize_predict_result_handles_single_polygon_shape() -> None:
+    raw = [{
+        "rec_texts": ["abc"],
+        "rec_scores": [0.98],
+        "rec_polys": [[0, 0], [10, 0], [10, 10], [0, 10]],
+    }]
+    normalized = PaddleOCREngine._normalize_predict_result(raw)
+    assert len(normalized) == 1
+    assert normalized[0]["text"] == "abc"
