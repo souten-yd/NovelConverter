@@ -76,6 +76,26 @@ def _run_paddle_ocr(
         raw_items = engine.run_paddle_ocr(image_path, lang)
         if not raw_items:
             result.warnings.append(f"PaddleOCR returned empty result: {Path(image_path).name}")
+            if not use_layout:
+                # Vertical writing / ruby-heavy pages may fail in fast mode.
+                # Retry once with layout options enabled before giving up.
+                try:
+                    PaddleOCREngine.configure(device=device, use_layout=True)
+                    retried = engine.run_paddle_ocr(image_path, lang)
+                    if retried:
+                        raw_items = retried
+                        result.engine = EngineType.PADDLE_LAYOUT.value
+                        result.warnings.append(
+                            f"PaddleOCR fast mode was empty; recovered with layout retry: {Path(image_path).name}"
+                        )
+                    else:
+                        result.warnings.append(
+                            f"PaddleOCR layout retry also returned empty: {Path(image_path).name}"
+                        )
+                except Exception as retry_exc:
+                    result.warnings.append(
+                        f"PaddleOCR layout retry failed: {Path(image_path).name}: {retry_exc}"
+                    )
         _populate_tokens_from_paddle(result, raw_items)
 
         # Build plain text from tokens if available, otherwise use engine output
