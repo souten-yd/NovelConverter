@@ -108,8 +108,24 @@ class BBox:
     def from_polygon(cls, points: list[list[float]]) -> "BBox":
         """Create bbox from PaddleOCR polygon [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]."""
         py_points = deep_to_py_scalars(points)
-        xs = [safe_float(p[0]) or 0.0 for p in py_points]
-        ys = [safe_float(p[1]) or 0.0 for p in py_points]
+        if not isinstance(py_points, (list, tuple)):
+            raise ValueError(f"polygon must be list/tuple, got {type(py_points).__name__}")
+
+        cleaned: list[tuple[float, float]] = []
+        for p in py_points:
+            if not isinstance(p, (list, tuple)) or len(p) < 2:
+                continue
+            x = safe_float(p[0])
+            y = safe_float(p[1])
+            if x is None or y is None:
+                continue
+            cleaned.append((x, y))
+
+        if not cleaned:
+            raise ValueError(f"invalid polygon points: {py_points!r}")
+
+        xs = [x for x, _ in cleaned]
+        ys = [y for _, y in cleaned]
         return cls(min(xs), min(ys), max(xs), max(ys))
 
 

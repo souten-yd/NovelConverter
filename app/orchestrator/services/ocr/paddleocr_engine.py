@@ -491,6 +491,19 @@ class PaddleOCREngine(OCREngine):
                     texts = item.get("rec_texts") or []
                     scores = item.get("rec_scores") or []
                     polys = item.get("rec_polys") or item.get("dt_polys") or []
+                    if isinstance(texts, str):
+                        texts = [texts]
+                    elif not isinstance(texts, (list, tuple)):
+                        texts = [texts]
+                    if not isinstance(scores, (list, tuple)):
+                        scores = [scores]
+                    if not isinstance(polys, (list, tuple)):
+                        polys = [polys]
+                    # Some payloads provide a single polygon as [[x,y], ...] for one text.
+                    if polys and isinstance(polys[0], (list, tuple)):
+                        first = polys[0]
+                        if len(first) >= 2 and all(isinstance(v, (int, float)) for v in first[:2]):
+                            polys = [polys]
                     for idx, text in enumerate(texts):
                         poly = polys[idx] if idx < len(polys) else None
                         score = scores[idx] if idx < len(scores) else 0.0
