@@ -279,7 +279,6 @@ class Qwen3CustomSynthesizer:
 
         try:
             import soundfile as sf
-            import torch
             from app.shared.audio_validator import validate_audio_array
 
             speaker = req.speaker or "Aria"
@@ -297,26 +296,26 @@ class Qwen3CustomSynthesizer:
             if lang not in self._supported_languages:
                 logger.warning(f"Language '{lang}' may not be supported. Supported: {self._supported_languages}")
 
-            # Build processor inputs
-            processor_kwargs = {
+            if not hasattr(self._model, "generate_custom_voice"):
+                return SynthesizeResponse(
+                    success=False,
+                    error="Loaded qwen-tts model does not support generate_custom_voice",
+                    worker_id="qwen3-custom",
+                )
+
+            generation_kwargs = {
                 "text": req.text,
+                "language": lang,
                 "speaker": speaker,
-                "return_tensors": "pt",
             }
-
-            # Add instruct if provided
             if req.instruct:
-                processor_kwargs["instruct"] = req.instruct
+                generation_kwargs["instruct"] = req.instruct
 
-            inputs = self._processor(**processor_kwargs).to(self._device)
-
-            with torch.no_grad():
-                output = self._model.generate(**inputs)
-
-            audio_np = output.cpu().numpy().squeeze()
+            output = self._model.generate_custom_voice(**generation_kwargs)
+            audio_np, sample_rate = _extract_first_audio_and_rate(output, default_sample_rate=24000)
 
             # Validate before writing
-            validation = validate_audio_array(audio_np, sample_rate=24000)
+            validation = validate_audio_array(audio_np, sample_rate=sample_rate)
             if not validation.valid:
                 logger.error(
                     f"Audio validation failed: {validation.failure_reason} "
@@ -329,7 +328,7 @@ class Qwen3CustomSynthesizer:
                     worker_id="qwen3-custom",
                 )
 
-            sf.write(str(out_path), audio_np, samplerate=24000)
+            sf.write(str(out_path), audio_np, samplerate=sample_rate)
 
             return SynthesizeResponse(
                 success=True,
@@ -348,6 +347,24 @@ class Qwen3CustomSynthesizer:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _extract_first_audio_and_rate(output, default_sample_rate: int = 24000):
+    sample_rate = default_sample_rate
+    wavs = output
+    if isinstance(output, tuple) and len(output) == 2:
+        wavs, sample_rate = output
+    if isinstance(wavs, list):
+        wavs = wavs[0] if wavs else []
+    if hasattr(wavs, "detach"):
+        wavs = wavs.detach()
+    if hasattr(wavs, "cpu"):
+        wavs = wavs.cpu()
+    if hasattr(wavs, "numpy"):
+        wavs = wavs.numpy()
+    if hasattr(wavs, "squeeze"):
+        wavs = wavs.squeeze()
+    return wavs, sample_rate
 
 def _resolve_output_path(requested: Optional[str], prefix: str) -> Path:
     if requested:
