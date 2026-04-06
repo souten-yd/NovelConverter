@@ -488,9 +488,33 @@ class PaddleOCREngine(OCREngine):
             item = deep_to_py_scalars(item)
             try:
                 if isinstance(item, dict):
-                    texts = item.get("rec_texts") or []
-                    scores = item.get("rec_scores") or []
-                    polys = item.get("rec_polys") or item.get("dt_polys") or []
+                    texts = (
+                        item.get("rec_texts")
+                        or item.get("rec_text")
+                        or item.get("texts")
+                        or item.get("text")
+                        or []
+                    )
+                    scores = (
+                        item.get("rec_scores")
+                        or item.get("rec_score")
+                        or item.get("scores")
+                        or item.get("score")
+                        or []
+                    )
+                    polys = (
+                        item.get("rec_polys")
+                        or item.get("dt_polys")
+                        or item.get("dt_boxes")
+                        or item.get("poly")
+                        or []
+                    )
+                    boxes = (
+                        item.get("rec_boxes")
+                        or item.get("boxes")
+                        or item.get("bbox")
+                        or []
+                    )
                     if isinstance(texts, str):
                         texts = [texts]
                     elif not isinstance(texts, (list, tuple)):
@@ -499,25 +523,33 @@ class PaddleOCREngine(OCREngine):
                         scores = [scores]
                     if not isinstance(polys, (list, tuple)):
                         polys = [polys]
+                    if not isinstance(boxes, (list, tuple)):
+                        boxes = [boxes]
                     # Some payloads provide a single polygon as [[x,y], ...] for one text.
                     if polys and isinstance(polys[0], (list, tuple)):
                         first = polys[0]
                         if len(first) >= 2 and all(isinstance(v, (int, float)) for v in first[:2]):
                             polys = [polys]
+                    # Some payloads provide a single bbox as [x1,y1,x2,y2].
+                    if boxes and isinstance(boxes[0], (int, float)):
+                        boxes = [boxes]
                     for idx, text in enumerate(texts):
                         poly = polys[idx] if idx < len(polys) else None
+                        bbox = boxes[idx] if idx < len(boxes) else None
                         score = scores[idx] if idx < len(scores) else 0.0
                         normalized.append({
                             "text": str(text),
                             "score": float(score) if score is not None else 0.0,
                             "poly": deep_to_py_scalars(poly),
+                            "bbox": deep_to_py_scalars(bbox),
                         })
                     # Defensive fallback for non-list dict payloads
                     if not texts and item.get("text"):
                         normalized.append({
                             "text": str(item.get("text", "")),
                             "score": float(item.get("score", 0.0) or 0.0),
-                            "poly": deep_to_py_scalars(item.get("poly") or item.get("bbox")),
+                            "poly": deep_to_py_scalars(item.get("poly") or item.get("bbox") or item.get("box")),
+                            "bbox": deep_to_py_scalars(item.get("bbox") or item.get("box")),
                         })
                     continue
 
@@ -531,6 +563,7 @@ class PaddleOCREngine(OCREngine):
                                     "text": text,
                                     "score": float(line.get("score", 0.0) or 0.0),
                                     "poly": deep_to_py_scalars(line.get("poly") or line.get("bbox")),
+                                    "bbox": deep_to_py_scalars(line.get("bbox") or line.get("box")),
                                 })
                             continue
                         if not isinstance(line, (list, tuple)) or len(line) < 2:
@@ -555,6 +588,7 @@ class PaddleOCREngine(OCREngine):
                                 "text": text.strip(),
                                 "score": score,
                                 "poly": deep_to_py_scalars(poly),
+                                "bbox": None,
                             })
                     continue
             except Exception as exc:

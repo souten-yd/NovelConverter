@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from app.orchestrator.services.ocr.ndlocr_lite_engine import NDLOCRLiteEngine
+from app.orchestrator.services.ocr.ndlocr_lite_engine import NDLOCRLiteEngine, _extract_text_from_ndlocr_json
 from app.orchestrator.services.ocr.paddleocr_engine import PaddleOCREngine
 
 
@@ -159,3 +159,19 @@ def test_ndlocr_extract_text_missing_output_file_returns_warning(
     assert text == ""
     assert any("output missing" in w for w in warnings)
     assert any("returned empty result" in w for w in warnings)
+
+
+def test_extract_text_from_ndlocr_json_collects_nested_text_nodes() -> None:
+    raw = """
+    {
+      "pages": [
+        {
+          "lines": [
+            {"text": "一行目"},
+            {"text": "二行目"}
+          ]
+        }
+      ]
+    }
+    """
+    assert _extract_text_from_ndlocr_json(raw) == "一行目\n二行目"

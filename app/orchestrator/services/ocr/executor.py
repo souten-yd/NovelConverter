@@ -125,9 +125,36 @@ def _populate_tokens_from_paddle(result: OCRPageResult, raw_items: list[dict]) -
                 continue
             conf = safe_float(line_info.get("score", 0.0)) or 0.0
             poly = line_info.get("poly")
-            if poly is None:
+            bbox_src = line_info.get("bbox")
+            bbox = None
+            if isinstance(poly, (list, tuple)) and poly:
+                # polygon [[x1,y1], ...]
+                if isinstance(poly[0], (list, tuple)):
+                    bbox = BBox.from_polygon(poly)
+                # xyxy bbox [x1, y1, x2, y2]
+                elif len(poly) >= 4:
+                    x1 = safe_float(poly[0])
+                    y1 = safe_float(poly[1])
+                    x2 = safe_float(poly[2])
+                    y2 = safe_float(poly[3])
+                    if None not in (x1, y1, x2, y2):
+                        bbox = BBox(x1, y1, x2, y2)
+            if bbox is None and isinstance(bbox_src, (list, tuple)) and len(bbox_src) >= 4:
+                x1 = safe_float(bbox_src[0])
+                y1 = safe_float(bbox_src[1])
+                x2 = safe_float(bbox_src[2])
+                y2 = safe_float(bbox_src[3])
+                if None not in (x1, y1, x2, y2):
+                    bbox = BBox(x1, y1, x2, y2)
+
+            if bbox is None:
+                logger.debug(
+                    "Paddle token skipped due to missing geometry: page=%s line=%s text=%r",
+                    result.page_index,
+                    line_idx,
+                    text[:40],
+                )
                 continue
-            bbox = BBox.from_polygon(poly)
             result.tokens.append(OCRToken(
                 text=text,
                 bbox=bbox,

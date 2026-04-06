@@ -105,3 +105,23 @@ def test_paddle_normalize_predict_result_handles_single_polygon_shape() -> None:
     normalized = PaddleOCREngine._normalize_predict_result(raw)
     assert len(normalized) == 1
     assert normalized[0]["text"] == "abc"
+
+
+def test_paddle_normalize_predict_result_supports_singular_keys_and_bbox() -> None:
+    raw = [{
+        "rec_text": "abc",
+        "rec_score": 0.98,
+        "rec_boxes": [1, 2, 30, 12],
+    }]
+    normalized = PaddleOCREngine._normalize_predict_result(raw)
+    assert len(normalized) == 1
+    assert normalized[0]["text"] == "abc"
+    assert normalized[0]["bbox"] == [1, 2, 30, 12]
+
+
+def test_populate_tokens_from_paddle_uses_bbox_when_poly_missing() -> None:
+    page = OCRPageResult(page_index=1, image_path="dummy.png")
+    raw_items = [{"text": "abc", "score": 0.7, "bbox": [0, 0, 40, 12]}]
+    _populate_tokens_from_paddle(page, raw_items)
+    assert len(page.tokens) == 1
+    assert page.tokens[0].bbox.width == 40
