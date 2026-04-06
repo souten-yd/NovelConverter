@@ -81,6 +81,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     p7zip-full \
     libarchive-tools \
     # Audio
+    sox \
     libsndfile1 \
     libsndfile1-dev \
     # Build tools
@@ -216,7 +217,9 @@ COPY docker/supervisord.conf /etc/supervisor/conf.d/novelconverter.conf
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY docker/prepare_assets.py ${APP_DIR}/docker/prepare_assets.py
+COPY docker/start_services.sh ${APP_DIR}/docker/start_services.sh
+RUN chmod +x /entrypoint.sh ${APP_DIR}/docker/start_services.sh
 
 # ── Runtime directories ───────────────────────────────────────────────────────
 # /workspace is RunPod's persistent volume mount point

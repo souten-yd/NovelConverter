@@ -74,7 +74,6 @@ def ensure_llm_model() -> Path:
             repo_id=LLM_REPO,
             filename=LLM_FILENAME,
             local_dir=str(models_dir),
-            local_dir_use_symlinks=False,
             cache_dir=str(get_cache_root() / "huggingface"),
         )
         # hf_hub_download may put file in a subdirectory; move to top level

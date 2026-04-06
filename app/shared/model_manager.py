@@ -146,7 +146,6 @@ def ensure_model(model_key: str) -> Path:
         snapshot_download(
             repo_id=repo_id,
             local_dir=str(model_dir),
-            local_dir_use_symlinks=False,
             cache_dir=str(get_cache_root() / "huggingface"),
         )
     except Exception as e:

@@ -5,6 +5,7 @@ import logging
 import os
 import site
 import sys
+import inspect
 from pathlib import Path
 from typing import Any, Optional
 
@@ -67,6 +68,43 @@ def _suppress_paddle_logs() -> None:
     """Suppress noisy ppocr / paddle log output regardless of PaddleOCR version."""
     for name in ("ppocr", "ppocr.utils", "ppocr.data", "paddle", "paddle.fluid"):
         logging.getLogger(name).setLevel(logging.ERROR)
+
+
+def _safe_nonempty(value: Any) -> bool:
+    """Safely evaluate collection/array non-emptiness without ambiguous truth checks."""
+    if value is None:
+        return False
+    if isinstance(value, (str, bytes)):
+        return len(value) > 0
+    if hasattr(value, "size"):
+        try:
+            return bool(value.size > 0)
+        except Exception:
+            return False
+    if isinstance(value, (list, tuple, dict, set)):
+        return len(value) > 0
+    return True
+
+
+def _as_sequence(value: Any) -> list[Any]:
+    """Convert unknown payload into a list without ambiguous truth checks."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if hasattr(value, "tolist"):
+        try:
+            casted = value.tolist()
+            if isinstance(casted, list):
+                return casted
+            if isinstance(casted, tuple):
+                return list(casted)
+            return [casted]
+        except Exception:
+            return [value]
+    return [value]
 
 
 class PaddleOCREngine(OCREngine):
@@ -238,6 +276,14 @@ class PaddleOCREngine(OCREngine):
             "device": cls._resolved_device,
             "enable_hpi": False,
         }
+        try:
+            from paddleocr import PaddleOCR
+            sig = inspect.signature(PaddleOCR.__init__)
+            if "show_log" in sig.parameters:
+                kwargs["show_log"] = False
+        except Exception:
+            # Signature check is best-effort; do not block initialization.
+            pass
         # 3.x の正式設定キーのみを利用（未対応環境でも安全に無視されるよう最小限）
         if cls._use_layout and not force_no_layout:
             kwargs["use_doc_orientation_classify"] = True
@@ -476,10 +522,9 @@ class PaddleOCREngine(OCREngine):
     @staticmethod
     def _normalize_predict_result(result: Any) -> list[dict[str, Any]]:
         """Normalize PaddleOCR 3.x predict() output."""
-        if not result:
+        if not _safe_nonempty(result):
             return []
-        if not isinstance(result, list):
-            result = [result]
+        result = _as_sequence(result)
 
         normalized: list[dict[str, Any]] = []
         for item_idx, item in enumerate(result):
@@ -488,68 +533,75 @@ class PaddleOCREngine(OCREngine):
             item = deep_to_py_scalars(item)
             try:
                 if isinstance(item, dict):
-                    texts = (
-                        item.get("rec_texts")
-                        or item.get("rec_text")
-                        or item.get("texts")
-                        or item.get("text")
-                        or []
-                    )
-                    scores = (
-                        item.get("rec_scores")
-                        or item.get("rec_score")
-                        or item.get("scores")
-                        or item.get("score")
-                        or []
-                    )
-                    polys = (
-                        item.get("rec_polys")
-                        or item.get("dt_polys")
-                        or item.get("dt_boxes")
-                        or item.get("poly")
-                        or []
-                    )
-                    boxes = (
-                        item.get("rec_boxes")
-                        or item.get("boxes")
-                        or item.get("bbox")
-                        or []
-                    )
+                    texts = item.get("rec_texts")
+                    if not _safe_nonempty(texts):
+                        texts = item.get("rec_text")
+                    if not _safe_nonempty(texts):
+                        texts = item.get("texts")
+                    if not _safe_nonempty(texts):
+                        texts = item.get("text")
+
+                    scores = item.get("rec_scores")
+                    if not _safe_nonempty(scores):
+                        scores = item.get("rec_score")
+                    if not _safe_nonempty(scores):
+                        scores = item.get("scores")
+                    if not _safe_nonempty(scores):
+                        scores = item.get("score")
+
+                    polys = item.get("rec_polys")
+                    if not _safe_nonempty(polys):
+                        polys = item.get("dt_polys")
+                    if not _safe_nonempty(polys):
+                        polys = item.get("dt_boxes")
+                    if not _safe_nonempty(polys):
+                        polys = item.get("poly")
+
+                    boxes = item.get("rec_boxes")
+                    if not _safe_nonempty(boxes):
+                        boxes = item.get("boxes")
+                    if not _safe_nonempty(boxes):
+                        boxes = item.get("bbox")
+
                     if isinstance(texts, str):
                         texts = [texts]
-                    elif not isinstance(texts, (list, tuple)):
+                    elif isinstance(texts, (list, tuple)):
+                        texts = list(texts)
+                    elif texts is None:
+                        texts = []
+                    else:
                         texts = [texts]
-                    if not isinstance(scores, (list, tuple)):
-                        scores = [scores]
-                    if not isinstance(polys, (list, tuple)):
-                        polys = [polys]
-                    if not isinstance(boxes, (list, tuple)):
-                        boxes = [boxes]
+                    scores = _as_sequence(scores)
+                    polys = _as_sequence(polys)
+                    boxes = _as_sequence(boxes)
+
                     # Some payloads provide a single polygon as [[x,y], ...] for one text.
-                    if polys and isinstance(polys[0], (list, tuple)):
+                    if len(polys) > 0 and isinstance(polys[0], (list, tuple)):
                         first = polys[0]
                         if len(first) >= 2 and all(isinstance(v, (int, float)) for v in first[:2]):
                             polys = [polys]
                     # Some payloads provide a single bbox as [x1,y1,x2,y2].
-                    if boxes and isinstance(boxes[0], (int, float)):
+                    if len(boxes) > 0 and isinstance(boxes[0], (int, float)):
                         boxes = [boxes]
                     for idx, text in enumerate(texts):
                         poly = polys[idx] if idx < len(polys) else None
                         bbox = boxes[idx] if idx < len(boxes) else None
-                        score = scores[idx] if idx < len(scores) else 0.0
+                        score = scores[idx] if idx < len(scores) else None
                         normalized.append({
                             "text": str(text),
-                            "score": float(score) if score is not None else 0.0,
+                            "score": float(score) if score is not None else None,
+                            "box": deep_to_py_scalars(poly) if poly is not None else deep_to_py_scalars(bbox),
                             "poly": deep_to_py_scalars(poly),
                             "bbox": deep_to_py_scalars(bbox),
                         })
                     # Defensive fallback for non-list dict payloads
-                    if not texts and item.get("text"):
+                    if len(texts) == 0 and isinstance(item.get("text"), str) and len(item.get("text")) > 0:
                         normalized.append({
                             "text": str(item.get("text", "")),
-                            "score": float(item.get("score", 0.0) or 0.0),
-                            "poly": deep_to_py_scalars(item.get("poly") or item.get("bbox") or item.get("box")),
-                            "bbox": deep_to_py_scalars(item.get("bbox") or item.get("box")),
+                            "score": float(item.get("score")) if item.get("score") is not None else None,
+                            "box": deep_to_py_scalars(item.get("poly") if item.get("poly") is not None else item.get("bbox") if item.get("bbox") is not None else item.get("box")),
+                            "poly": deep_to_py_scalars(item.get("poly") if item.get("poly") is not None else item.get("bbox")),
+                            "bbox": deep_to_py_scalars(item.get("bbox") if item.get("bbox") is not None else item.get("box")),
                         })
                     continue
 
@@ -561,9 +613,10 @@ class PaddleOCREngine(OCREngine):
                             if text:
                                 normalized.append({
                                     "text": text,
-                                    "score": float(line.get("score", 0.0) or 0.0),
-                                    "poly": deep_to_py_scalars(line.get("poly") or line.get("bbox")),
-                                    "bbox": deep_to_py_scalars(line.get("bbox") or line.get("box")),
+                                    "score": float(line.get("score")) if line.get("score") is not None else None,
+                                    "box": deep_to_py_scalars(line.get("poly") if line.get("poly") is not None else line.get("bbox") if line.get("bbox") is not None else line.get("box")),
+                                    "poly": deep_to_py_scalars(line.get("poly") if line.get("poly") is not None else line.get("bbox")),
+                                    "bbox": deep_to_py_scalars(line.get("bbox") if line.get("bbox") is not None else line.get("box")),
                                 })
                             continue
                         if not isinstance(line, (list, tuple)) or len(line) < 2:
@@ -573,12 +626,12 @@ class PaddleOCREngine(OCREngine):
                         text = ""
                         score = 0.0
                         if isinstance(text_info, (list, tuple)) and len(text_info) >= 1:
-                            text = str(text_info[0] or "")
+                            text = str(text_info[0]) if text_info[0] is not None else ""
                             if len(text_info) >= 2 and text_info[1] is not None:
                                 score = float(text_info[1])
                         elif isinstance(text_info, dict):
-                            text = str(text_info.get("text", "") or "")
-                            score = float(text_info.get("score", 0.0) or 0.0)
+                            text = str(text_info.get("text", "")) if text_info.get("text") is not None else ""
+                            score = float(text_info.get("score")) if text_info.get("score") is not None else 0.0
                         elif isinstance(text_info, str):
                             text = text_info
                             if len(line) > 2 and line[2] is not None:
@@ -587,6 +640,7 @@ class PaddleOCREngine(OCREngine):
                             normalized.append({
                                 "text": text.strip(),
                                 "score": score,
+                                "box": deep_to_py_scalars(poly),
                                 "poly": deep_to_py_scalars(poly),
                                 "bbox": None,
                             })
@@ -629,7 +683,7 @@ class PaddleOCREngine(OCREngine):
             self._init_ocr(paddle_lang)
 
             result = self.run_paddle_ocr(str(image_path), paddle_lang)
-            if not result:
+            if len(result) == 0:
                 warnings.append(f"PaddleOCR returned empty result: {image_path.name}")
                 return "", warnings
 

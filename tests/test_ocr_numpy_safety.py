@@ -117,6 +117,19 @@ def test_paddle_normalize_predict_result_supports_singular_keys_and_bbox() -> No
     assert len(normalized) == 1
     assert normalized[0]["text"] == "abc"
     assert normalized[0]["bbox"] == [1, 2, 30, 12]
+    assert normalized[0]["box"] == [1, 2, 30, 12]
+
+
+def test_paddle_normalize_predict_result_handles_numpy_array_without_ambiguous_truth() -> None:
+    raw = [{
+        "rec_texts": ["abc"],
+        "rec_scores": np.array([0.98], dtype=np.float32),
+        "rec_polys": np.array([[[0, 0], [10, 0], [10, 10], [0, 10]]], dtype=np.int16),
+    }]
+    normalized = PaddleOCREngine._normalize_predict_result(raw)
+    assert len(normalized) == 1
+    assert normalized[0]["text"] == "abc"
+    assert abs(float(normalized[0]["score"]) - 0.98) < 1e-6
 
 
 def test_populate_tokens_from_paddle_uses_bbox_when_poly_missing() -> None:
