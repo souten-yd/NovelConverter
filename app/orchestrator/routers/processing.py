@@ -58,12 +58,17 @@ def _build_empty_segments_detail(project_dir: Path, raw_text: str) -> str:
 
         warnings = manifest.get("warnings") or []
         files = manifest.get("extracted_files") or []
+        file_warnings = [str(f.get("warning") or "") for f in files if isinstance(f, dict)]
         if any("RAR backend missing" in str(w) for w in warnings):
             reasons.append("RAR展開バックエンド(unrar/7zip/bsdtar)が見つかりません")
         if any("pytesseract not installed" in str(w) for w in warnings):
             reasons.append("pytesseract が未導入です")
         if any("OCR failed" in str(w) for w in warnings):
             reasons.append("OCR処理に失敗しました")
+        if any("PaddleOCR returned empty result" in w for w in file_warnings):
+            reasons.append("PaddleOCRがテキスト領域を検出できていません（縦書き/ルビページはレイアウトモードを推奨）")
+        if any("layout retry also returned empty" in w for w in file_warnings):
+            reasons.append("PaddleOCRレイアウト再試行でも文字検出できませんでした")
         if files and not any(f.get("status") == "ok" for f in files):
             reasons.append("入力ファイルは検出されましたが、有効な本文テキストを抽出できませんでした")
 

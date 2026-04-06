@@ -31,6 +31,23 @@ def test_build_empty_segments_detail_without_hints(tmp_path: Path):
     assert detail == "テキストからセグメントが生成できませんでした。ファイルの内容を確認してください。"
 
 
+def test_build_empty_segments_detail_with_paddle_empty_hint(tmp_path: Path):
+    manifest = {
+        "warnings": [],
+        "extracted_files": [
+            {
+                "relative_path": "page1.jpg",
+                "status": "warning",
+                "warning": "PaddleOCR returned empty result: page1.jpg",
+            },
+        ],
+    }
+    (tmp_path / "ingest_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    detail = _build_empty_segments_detail(tmp_path, raw_text="\n")
+    assert "PaddleOCRがテキスト領域を検出できていません" in detail
+
+
 def test_analyze_segmentation_stages_empty_text():
     reasons, stats = _analyze_segmentation_stages("   \n\n")
     assert "empty text" in reasons
