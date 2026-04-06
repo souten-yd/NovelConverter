@@ -19,17 +19,12 @@
       この操作は取り消せません。DBメタデータに加えて、OCR中間生成物・preview/render成果物・speaker mapping cache・temp files も削除されます。
     </p>
     <p style="font-size:0.9em;color:#334155;margin-top:8px">対象: {{ project.name }}</p>
-    <label style="margin-top:12px;display:block">
-      <input type="checkbox" id="deleteConfirmStep1">
-      生成物を含むすべての関連ファイルが削除されることを理解しました
-    </label>
-    <label style="display:block;margin-top:10px">
-      <span style="font-size:0.85em;color:#64748b">確認のため「DELETE」と入力してください</span>
-      <input id="deleteConfirmText" type="text" class="input" placeholder="DELETE">
-    </label>
+    <p style="font-size:0.85em;color:#64748b;margin-top:10px">
+      「削除する」を押すと確認ダイアログが表示されます。
+    </p>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeDeleteProjectModal()">キャンセル</button>
-      <button id="deleteProjectExecBtn" class="btn btn-danger" onclick="deleteProject()" disabled>削除する</button>
+      <button id="deleteProjectExecBtn" class="btn btn-danger" onclick="deleteProject()">削除する</button>
     </div>
   </div>
 </div>
@@ -260,26 +255,16 @@ function _statusColor(st) {
 <script>
 function openDeleteProjectModal() {
   document.getElementById('deleteProjectModal').classList.remove('hidden');
-  document.getElementById('deleteConfirmStep1').checked = false;
-  document.getElementById('deleteConfirmText').value = '';
-  syncDeleteButtonState();
-  document.getElementById('deleteConfirmText').focus();
+  document.getElementById('deleteProjectExecBtn').focus();
 }
 
 function closeDeleteProjectModal() {
   document.getElementById('deleteProjectModal').classList.add('hidden');
 }
 
-function syncDeleteButtonState() {
-  const checked = document.getElementById('deleteConfirmStep1').checked;
-  const typed = document.getElementById('deleteConfirmText').value.trim().toUpperCase() === 'DELETE';
-  document.getElementById('deleteProjectExecBtn').disabled = !(checked && typed);
-}
-
-document.getElementById('deleteConfirmStep1')?.addEventListener('change', syncDeleteButtonState);
-document.getElementById('deleteConfirmText')?.addEventListener('input', syncDeleteButtonState);
-
 async function deleteProject() {
+  const ok = window.confirm('このプロジェクトを削除します。よろしいですか？');
+  if (!ok) return;
   const btn = document.getElementById('deleteProjectExecBtn');
   btn.disabled = true;
   const res = await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
