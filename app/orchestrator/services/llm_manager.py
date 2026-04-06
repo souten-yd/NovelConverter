@@ -622,7 +622,6 @@ def _download_worker(repo_id: str, filename: str, task_key: str) -> None:
             repo_id=repo_id,
             filename=filename,
             local_dir=dest_dir,
-            local_dir_use_symlinks=False,
         )
         # Move to top level of models dir if nested
         dest_path = _models_dir() / filename
