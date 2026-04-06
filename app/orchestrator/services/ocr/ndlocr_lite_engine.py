@@ -11,6 +11,7 @@ Availability criteria (all must pass):
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import tempfile
@@ -53,15 +54,50 @@ def _tail(text: str, limit: int = 600) -> str:
     return src[-limit:]
 
 
+def _extract_text_from_ndlocr_json(raw_text: str) -> str:
+    """Best-effort text extraction from NDLOCR JSON outputs."""
+    try:
+        payload = json.loads(raw_text)
+    except Exception:
+        return ""
+
+    found: list[str] = []
+
+    def _walk(node) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                k = str(key).lower()
+                if k in ("text", "rec_text", "ocr_text") and isinstance(value, str):
+                    text = value.strip()
+                    if text:
+                        found.append(text)
+                elif k in ("texts", "lines") and isinstance(value, list):
+                    for item in value:
+                        _walk(item)
+                else:
+                    _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(payload)
+    return "\n".join(found).strip()
+
+
 def _read_ndlocr_output_path(output_path: Path) -> list[str]:
     texts: list[str] = []
     if output_path.is_dir():
         for pattern in ("*.txt", "*.json", "*.tsv", "*.csv"):
             for out_file in sorted(output_path.rglob(pattern)):
                 try:
-                    texts.append(out_file.read_text(encoding="utf-8"))
+                    raw = out_file.read_text(encoding="utf-8")
                 except Exception:
                     continue
+                if out_file.suffix.lower() == ".json":
+                    extracted = _extract_text_from_ndlocr_json(raw)
+                    texts.append(extracted or raw)
+                else:
+                    texts.append(raw)
         return texts
     if output_path.is_file():
         try:
