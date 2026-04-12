@@ -302,12 +302,18 @@ class NDLOCRLiteEngine(OCREngine):
                 logger.warning(f"NDLOCR image normalize failed; fallback to raw copy: {exc}")
                 shutil.copy2(image_path, dest)
 
+            # Upstream ocr.py exposes: --sourceimg / --sourcedir / --output
+            # / --viz / --det-weights / --det-classes / --rec-weights /
+            # --rec-weights30 / --rec-weights50 / --rec-classes / --simple-mode
+            # / --device. --model_path is NOT a valid argument; passing it
+            # causes argparse to abort with rc=2 ("unrecognized arguments").
+            # Model paths default to base_dir/model/*.onnx, which is satisfied
+            # because cwd is set to _NDLOCR_ROOT below.
             cmd = [
                 py,
                 str(_OCR_SCRIPT),
                 "--sourceimg", str(dest),
                 "--output", str(output_path),
-                "--model_path", str(_MODEL_DIR),
                 "--device", status["device_request"],
             ]
             cmd_str = " ".join(cmd)

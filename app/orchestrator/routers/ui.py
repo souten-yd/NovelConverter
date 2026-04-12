@@ -23,6 +23,16 @@ def llm_manager_page(request: Request):
     return templates.TemplateResponse(request, "llm_manager.html", {})
 
 
+@router.get("/voice-design", response_class=HTMLResponse)
+def voice_design_page(request: Request):
+    """Global Voice Design Studio (project-independent).
+
+    Lets users design voices, generate sample audio, and save shared presets
+    that can be used across all projects.
+    """
+    return templates.TemplateResponse(request, "voice_design.html", {})
+
+
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)):
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
