@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,12 @@ router = APIRouter(prefix="/api/voice-presets", tags=["voice_presets"])
 
 def _sample_dir() -> Path:
     d = get_data_dir() / "voice_presets" / "samples"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _reference_dir() -> Path:
+    d = get_data_dir() / "voice_presets" / "references"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -105,4 +111,79 @@ def preview_voice_preset(preset_id: str, body: VoicePresetPreviewRequest, db: Se
         "preview_url": f"/voice-presets/samples/{out_path.name}",
         "sample_audio_path": preset.sample_audio_path,
         "duration_seconds": result.duration_seconds,
+    }
+
+
+# ── Inline sample preview (no preset persistence) ────────────────────────────
+
+class InlinePreviewRequest(BaseModel):
+    text: str = "こんにちは、よろしくお願いします。"
+    engine_type: str = "custom"  # base / custom / design
+    language: str = "ja"
+    speaker_name: Optional[str] = None
+    instruct: Optional[str] = None
+    voice_description: Optional[str] = None
+    reference_audio_path: Optional[str] = None
+    reference_text: Optional[str] = None
+    speed: float = 1.0
+
+
+@router.post("/preview_sample")
+def preview_sample(body: InlinePreviewRequest):
+    """Generate a preview audio from inline parameters without saving a preset.
+
+    Used by the global Voice Design Studio to audition a voice before saving it
+    as a shared preset.
+    """
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="プレビューテキストを入力してください")
+
+    sample_dir = _sample_dir()
+    preview_id = str(uuid.uuid4())[:8]
+    out_path = sample_dir / f"preview_{preview_id}.wav"
+
+    result = synthesize(
+        text=text,
+        worker_type=body.engine_type or "custom",
+        output_path=out_path,
+        language=body.language or "ja",
+        speaker=body.speaker_name,
+        instruct=body.instruct,
+        voice_description=body.voice_description,
+        reference_audio_path=body.reference_audio_path,
+        reference_text=body.reference_text,
+        speed=float(body.speed or 1.0),
+    )
+
+    if not result.success:
+        raise HTTPException(status_code=500, detail=result.error or "音声合成に失敗しました")
+
+    return {
+        "preview_url": f"/voice-presets/samples/{out_path.name}",
+        "sample_audio_path": str(out_path),
+        "duration_seconds": result.duration_seconds,
+        "engine_type": body.engine_type,
+    }
+
+
+@router.post("/upload_reference")
+async def upload_reference(file: UploadFile = File(...)):
+    """Upload a reference audio file to the global voice_presets reference store."""
+    fname = file.filename or "reference.wav"
+    ext = Path(fname).suffix.lower()
+    if ext not in {".wav", ".mp3", ".flac", ".ogg", ".m4a"}:
+        raise HTTPException(status_code=400, detail=f"Unsupported audio format: {ext}")
+
+    ref_dir = _reference_dir()
+    uid = str(uuid.uuid4())[:8]
+    dest = ref_dir / f"global_{uid}{ext}"
+
+    data = await file.read()
+    dest.write_bytes(data)
+
+    return {
+        "reference_audio_path": str(dest),
+        "filename": dest.name,
+        "size_bytes": len(data),
     }

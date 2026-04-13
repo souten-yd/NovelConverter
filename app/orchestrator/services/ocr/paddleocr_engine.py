@@ -167,28 +167,51 @@ class PaddleOCREngine(OCREngine):
 
     @classmethod
     def run_paddle_ocr(cls, image_path: str, lang: str = "japan") -> list[dict[str, Any]]:
-        """PaddleOCR 3.x 対応の単一呼び出し口."""
+        """PaddleOCR 3.x 対応の単一呼び出し口.
+
+        Passes the image path directly to ``predict()`` rather than a
+        pre-loaded numpy array.  This is the canonical usage pattern in the
+        PaddleOCR 3.x docs and avoids two failure modes we hit with numpy
+        arrays: (1) RGB/BGR channel-order ambiguity — PaddleOCR expects BGR
+        when given a numpy array, but PIL returns RGB, producing poor
+        recognition on coloured scans; (2) dtype normalisation edge cases
+        on grayscale-with-alpha sources.  When the path is passed directly
+        PaddleOCR uses its own cv2.imread-based loader which handles these
+        correctly.  Falls back to a normalised numpy array only if the path
+        cannot be resolved.
+        """
+        import os
         import numpy as np
         from PIL import Image
 
         cls._init_ocr(lang)
         if cls._ocr_instance is None:
             return []
-        image = Image.open(image_path)
-        image_arr = np.asarray(image)
-        pre_min = float(np.nanmin(image_arr)) if image_arr.size else 0.0
-        pre_max = float(np.nanmax(image_arr)) if image_arr.size else 0.0
-        normalized_image = normalize_image_for_ocr(image_arr)
-        logger.debug(
-            "PaddleOCR pre-normalize: dtype=%s shape=%s min=%.3f max=%.3f -> dtype=%s shape=%s",
-            image_arr.dtype,
-            tuple(image_arr.shape),
-            pre_min,
-            pre_max,
-            normalized_image.dtype,
-            tuple(normalized_image.shape),
-        )
-        result = cls._ocr_instance.predict(normalized_image)
+
+        try:
+            if os.path.isfile(image_path):
+                logger.debug("PaddleOCR predict via path: %s", image_path)
+                result = cls._ocr_instance.predict(str(image_path))
+            else:
+                raise FileNotFoundError(image_path)
+        except Exception as exc:
+            logger.warning(
+                "PaddleOCR predict(path) failed (%s); falling back to numpy BGR array",
+                exc,
+            )
+            image = Image.open(image_path).convert("RGB")
+            image_arr = np.asarray(image)
+            normalized_image = normalize_image_for_ocr(image_arr)
+            # Swap RGB→BGR to match PaddleOCR's OpenCV-style expectations.
+            if normalized_image.ndim == 3 and normalized_image.shape[2] == 3:
+                normalized_image = normalized_image[:, :, ::-1]
+            logger.debug(
+                "PaddleOCR fallback numpy: dtype=%s shape=%s",
+                normalized_image.dtype,
+                tuple(normalized_image.shape),
+            )
+            result = cls._ocr_instance.predict(normalized_image)
+
         cls._log_predict_result_sample(result)
         normalized = cls._normalize_predict_result(result)
         return normalized

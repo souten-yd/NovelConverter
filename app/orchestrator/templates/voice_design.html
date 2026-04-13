@@ -1,0 +1,547 @@
+{% extends "base.html" %}
+{% block title %}Voice Design Studio – NovelConverter{% endblock %}
+{% block content %}
+<div class="breadcrumb"><a href="/">ホーム</a> / Voice Design Studio</div>
+
+<div class="page-header">
+  <h1>🎨 Voice Design Studio</h1>
+  <span class="text-muted" style="margin-left:8px;font-size:0.85em">全プロジェクト共通ボイスプリセット</span>
+</div>
+
+<p class="text-muted">
+  声をデザインしてサンプル音声を生成し、共通プリセットとして保存します。
+  保存したプリセットは、すべてのプロジェクトの音声設定から選択できます。
+</p>
+
+<div class="vds-layout">
+  <!-- ══════════ LEFT: Preset list ══════════ -->
+  <div class="vds-sidebar" id="vdsSidebar">
+    <div class="card vds-sidebar-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0;font-size:16px">プリセット一覧</h2>
+        <button class="btn btn-primary btn-sm" onclick="newPreset()">＋新規</button>
+      </div>
+      <div id="presetList">
+        <div class="text-muted" style="font-size:0.85em">読み込み中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ RIGHT: Design panel ══════════ -->
+  <div class="vds-panel" id="vdsPanel">
+
+    <div class="card vds-speaker-header">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="speaker-avatar-lg" id="panelAvatar">🎤</div>
+        <div style="flex:1;min-width:200px">
+          <input type="text" id="f_name" class="input" placeholder="プリセット名 (例: 元気な女性ボイス)"
+                 style="font-size:1.1em;font-weight:600" oninput="markDirty()">
+          <input type="text" id="f_description" class="input" placeholder="説明 (任意)"
+                 style="margin-top:6px;font-size:0.9em" oninput="markDirty()">
+        </div>
+      </div>
+    </div>
+
+    <!-- Worker type tabs -->
+    <div class="card" style="padding:0;margin-top:12px;overflow:hidden">
+      <div class="vds-tabs">
+        <button class="vds-tab active" id="tab-custom" onclick="switchWorkerTab('custom')">🎤 カスタム</button>
+        <button class="vds-tab" id="tab-design" onclick="switchWorkerTab('design')">✍ デザイン</button>
+        <button class="vds-tab" id="tab-base" onclick="switchWorkerTab('base')">🎵 クローン</button>
+      </div>
+
+      <div class="vds-tab-panel" id="panel-custom">
+        <div class="vds-form-section">
+          <div class="vds-field">
+            <label>話者名 <span class="text-muted" style="font-size:0.8em">(Qwen3-TTS組み込み話者)</span></label>
+            <select id="f_speaker_name" class="input" onchange="markDirty()">
+              <option value="">選択してください...</option>
+              <option>Aria</option><option>Roger</option><option>Sarah</option>
+              <option>Laura</option><option>Charlie</option><option>George</option>
+              <option>Callum</option><option>River</option><option>Liam</option>
+              <option>Charlotte</option><option>Alice</option><option>Matilda</option>
+              <option>Will</option><option>Jessica</option><option>Eric</option>
+              <option>Chris</option><option>Brian</option>
+            </select>
+          </div>
+          <div class="vds-field">
+            <label>音声スタイル指示 <span class="text-muted" style="font-size:0.8em">(任意)</span></label>
+            <textarea id="f_instruct" class="input" rows="3"
+              placeholder="例: 穏やかで優しい話し方で、少し遠慮がちに"
+              oninput="markDirty()"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="vds-tab-panel" id="panel-design" style="display:none">
+        <div class="vds-form-section">
+          <div class="vds-field">
+            <label>声の説明文 <span class="text-muted" style="font-size:0.8em">(自然言語で声を描写)</span></label>
+            <textarea id="f_voice_description" class="input" rows="5"
+              placeholder="例: A warm, gentle female voice with a soft tone, speaking at a moderate pace with slight Japanese accent."
+              oninput="markDirty(); updateCharCount()"></textarea>
+            <div id="descCharCount" style="font-size:0.78em;color:#94a3b8;text-align:right;margin-top:2px">0文字</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="vds-tab-panel" id="panel-base" style="display:none">
+        <div class="vds-form-section">
+          <div class="vds-field">
+            <label>参照音声ファイル</label>
+            <div id="refAudioInfo" style="font-size:0.85em;color:#64748b;margin-bottom:8px">未設定</div>
+            <input type="file" id="f_ref_audio_file" accept=".wav,.mp3,.flac,.ogg,.m4a"
+                   style="display:none" onchange="uploadRefAudio()">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-outline btn-sm" onclick="document.getElementById('f_ref_audio_file').click()">
+                📂 音声ファイルを選択
+              </button>
+              <span id="refUploadStatus" style="font-size:0.82em;color:#64748b;align-self:center"></span>
+            </div>
+          </div>
+          <div class="vds-field">
+            <label>参照テキスト <span class="text-muted" style="font-size:0.8em">(参照音声の内容)</span></label>
+            <textarea id="f_reference_text" class="input" rows="2"
+              placeholder="参照音声のセリフを入力"
+              oninput="markDirty()"></textarea>
+          </div>
+          <input type="hidden" id="f_reference_audio_path">
+        </div>
+      </div>
+    </div>
+
+    <!-- Common params -->
+    <div class="card" style="margin-top:12px;padding:14px">
+      <h3 style="margin:0 0 10px;font-size:14px">共通パラメータ</h3>
+      <div class="vds-param-grid">
+        <div class="vds-param">
+          <label>話速 <span id="speedVal">1.0</span>x</label>
+          <input type="range" id="f_speed" min="0.5" max="2.0" step="0.05" value="1.0"
+                 oninput="document.getElementById('speedVal').textContent=parseFloat(this.value).toFixed(2);markDirty()">
+        </div>
+        <div class="vds-param">
+          <label>前ポーズ (ms)</label>
+          <input type="number" id="f_pause_before" class="input" value="0" min="0" max="5000" step="50" oninput="markDirty()">
+        </div>
+        <div class="vds-param">
+          <label>後ポーズ (ms)</label>
+          <input type="number" id="f_pause_after" class="input" value="300" min="0" max="5000" step="50" oninput="markDirty()">
+        </div>
+        <div class="vds-param">
+          <label>音量調整 (dB)</label>
+          <input type="number" id="f_volume_db" class="input" value="0" min="-20" max="20" step="0.5" oninput="markDirty()">
+        </div>
+      </div>
+    </div>
+
+    <!-- Preview + Save actions -->
+    <div class="card" style="margin-top:12px;padding:14px">
+      <h3 style="margin:0 0 10px;font-size:14px">サンプル生成 & 保存</h3>
+      <div class="vds-field">
+        <label>プレビューテキスト</label>
+        <input type="text" id="previewText" class="input"
+               value="こんにちは、よろしくお願いします。"
+               placeholder="試し読みするテキスト">
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+        <button class="btn btn-outline" onclick="generatePreview()" id="btnPreview">
+          ▶ サンプル音声を生成
+        </button>
+        <button class="btn btn-primary" onclick="savePreset()" id="btnSave">
+          💾 プリセットとして保存
+        </button>
+        <button class="btn btn-outline btn-sm" id="btnDelete" onclick="deleteCurrentPreset()" style="display:none">
+          🗑 削除
+        </button>
+        <span id="saveStatus" style="font-size:0.85em"></span>
+      </div>
+      <div id="previewAudioWrap" style="display:none;margin-top:10px">
+        <audio id="previewAudio" controls style="width:100%;border-radius:8px"></audio>
+        <div id="previewAudioMeta" style="font-size:0.78em;color:#64748b;margin-top:4px"></div>
+      </div>
+      <div id="previewError" style="display:none;color:#c53030;font-size:0.85em;margin-top:8px"></div>
+    </div>
+
+  </div><!-- /vds-panel -->
+</div><!-- /vds-layout -->
+{% endblock %}
+
+{% block scripts %}
+<style>
+/* Re-use voice_studio.html styles with minor adjustments */
+.vds-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 768px) {
+  .vds-layout { grid-template-columns: 1fr; }
+  .vds-sidebar { position: static !important; }
+}
+.vds-sidebar { position: sticky; top: 16px; }
+.vds-sidebar-card { padding: 14px; max-height: 80vh; overflow-y: auto; }
+
+.preset-chip {
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: .15s;
+  background: #fff;
+}
+.preset-chip:hover { border-color: #4f6ef7; background: #f8faff; }
+.preset-chip.selected { border-color: #4f6ef7; background: #eff2ff; }
+.preset-chip-name { font-weight: 600; font-size: 0.92em; }
+.preset-chip-meta { font-size: 0.75em; color: #64748b; margin-top: 2px; }
+
+.speaker-avatar-lg {
+  width: 48px; height: 48px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 22px; color: #fff;
+  background: #4299e1; flex-shrink: 0;
+}
+.worker-mini-badge { padding: 1px 5px; border-radius: 4px; font-size: 0.75em; font-weight: 700; }
+.wt-custom { background: #dbeafe; color: #1d4ed8; }
+.wt-design { background: #fef3c7; color: #92400e; }
+.wt-base   { background: #d1fae5; color: #065f46; }
+
+.vds-speaker-header { padding: 14px; }
+.vds-tabs { display: flex; border-bottom: 2px solid #e2e8f0; background: #f8fafc; }
+.vds-tab {
+  flex: 1; padding: 12px 8px; border: none; background: none;
+  font-size: 13px; font-weight: 600; color: #64748b;
+  cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px;
+  transition: .15s; -webkit-tap-highlight-color: transparent;
+}
+.vds-tab:hover { color: #4f6ef7; }
+.vds-tab.active { color: #4f6ef7; border-bottom-color: #4f6ef7; }
+.vds-tab-panel { padding: 16px; }
+.vds-form-section { display: flex; flex-direction: column; gap: 12px; }
+.vds-field { display: flex; flex-direction: column; gap: 4px; }
+.vds-field label { font-size: 0.85em; font-weight: 600; color: #374151; }
+
+.vds-param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+@media (max-width: 500px) { .vds-param-grid { grid-template-columns: 1fr; } }
+.vds-param { display: flex; flex-direction: column; gap: 4px; }
+.vds-param label { font-size: 0.8em; color: #64748b; font-weight: 600; }
+.vds-param input[type=range] { width: 100%; }
+.vds-param input[type=number] { width: 100%; }
+</style>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let presets = [];
+let currentPresetId = null;
+let currentWorkerType = 'custom';
+let isDirty = false;
+
+function esc(s){return String(s||'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));}
+
+function setVal(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.value = val == null ? '' : val;
+}
+
+function setSlider(sliderId, val, labelId) {
+  const el = document.getElementById(sliderId);
+  if (el) el.value = val;
+  const lbl = document.getElementById(labelId);
+  if (lbl) lbl.textContent = parseFloat(val).toFixed(2);
+}
+
+function markDirty() { isDirty = true; }
+
+function updateCharCount() {
+  const desc = document.getElementById('f_voice_description')?.value || '';
+  const el = document.getElementById('descCharCount');
+  if (el) el.textContent = desc.length + '文字';
+}
+
+// ── Preset list ───────────────────────────────────────────────────────────────
+
+async function loadPresets() {
+  try {
+    const r = await fetch('/api/voice-presets');
+    presets = r.ok ? await r.json() : [];
+  } catch(_) {
+    presets = [];
+  }
+  renderPresetList();
+}
+
+function renderPresetList() {
+  const list = document.getElementById('presetList');
+  if (!presets.length) {
+    list.innerHTML = '<div class="text-muted" style="font-size:0.85em">まだプリセットがありません。「＋新規」から作成してください。</div>';
+    return;
+  }
+  list.innerHTML = presets.map(p => `
+    <div class="preset-chip ${p.preset_id === currentPresetId ? 'selected' : ''}"
+         id="chip-${p.preset_id}" onclick="selectPreset('${p.preset_id}')">
+      <div class="preset-chip-name">${esc(p.name)}
+        <span class="worker-mini-badge wt-${esc(p.engine_type)}" style="margin-left:4px">${esc(p.engine_type)}</span>
+      </div>
+      <div class="preset-chip-meta">${esc(p.description || '説明なし')}</div>
+    </div>
+  `).join('');
+}
+
+function newPreset() {
+  if (isDirty && !confirm('変更が保存されていません。新規プリセットに切り替えますか？')) return;
+  currentPresetId = null;
+  isDirty = false;
+  setVal('f_name', '');
+  setVal('f_description', '');
+  setVal('f_speaker_name', '');
+  setVal('f_instruct', '');
+  setVal('f_voice_description', '');
+  setVal('f_reference_audio_path', '');
+  setVal('f_reference_text', '');
+  setSlider('f_speed', 1.0, 'speedVal');
+  setVal('f_pause_before', 0);
+  setVal('f_pause_after', 300);
+  setVal('f_volume_db', 0);
+  document.getElementById('refAudioInfo').textContent = '未設定';
+  document.getElementById('refUploadStatus').textContent = '';
+  document.getElementById('btnDelete').style.display = 'none';
+  document.getElementById('saveStatus').textContent = '';
+  switchWorkerTab('custom', false);
+  clearPreviewAudio();
+  updateCharCount();
+  renderPresetList();
+}
+
+function selectPreset(presetId) {
+  if (isDirty && !confirm('変更が保存されていません。別のプリセットを開きますか？')) return;
+  const p = presets.find(x => x.preset_id === presetId);
+  if (!p) return;
+  currentPresetId = p.preset_id;
+  isDirty = false;
+  const synth = p.synthesis_params || {};
+  setVal('f_name', p.name || '');
+  setVal('f_description', p.description || '');
+  setVal('f_speaker_name', synth.speaker_name || '');
+  setVal('f_instruct', synth.instruct || '');
+  setVal('f_voice_description', synth.voice_description || '');
+  setVal('f_reference_audio_path', synth.reference_audio_path || '');
+  setVal('f_reference_text', synth.reference_text || '');
+  setSlider('f_speed', synth.speed ?? 1.0, 'speedVal');
+  setVal('f_pause_before', synth.pause_ms_before ?? 0);
+  setVal('f_pause_after', synth.pause_ms_after ?? 300);
+  setVal('f_volume_db', synth.volume_gain_db ?? 0);
+  if (synth.reference_audio_path) {
+    const fname = String(synth.reference_audio_path).split('/').pop();
+    document.getElementById('refAudioInfo').textContent = '設定済み: ' + fname;
+  } else {
+    document.getElementById('refAudioInfo').textContent = '未設定';
+  }
+  document.getElementById('btnDelete').style.display = '';
+  document.getElementById('saveStatus').textContent = '';
+  switchWorkerTab(p.engine_type || 'custom', false);
+  clearPreviewAudio();
+  // If a sample_audio_path is already present, show it
+  if (p.sample_audio_path) {
+    const fname = String(p.sample_audio_path).split('/').pop();
+    const audio = document.getElementById('previewAudio');
+    if (audio) {
+      audio.src = `/voice-presets/samples/${fname}?t=` + Date.now();
+      document.getElementById('previewAudioWrap').style.display = '';
+    }
+  }
+  updateCharCount();
+  renderPresetList();
+}
+
+// ── Worker type tabs ──────────────────────────────────────────────────────────
+
+function switchWorkerTab(wt, dirty = true) {
+  currentWorkerType = wt;
+  ['custom','design','base'].forEach(t => {
+    document.getElementById('tab-' + t)?.classList.toggle('active', t === wt);
+    const panel = document.getElementById('panel-' + t);
+    if (panel) panel.style.display = t === wt ? '' : 'none';
+  });
+  if (dirty) markDirty();
+}
+
+// ── Reference audio upload ────────────────────────────────────────────────────
+
+async function uploadRefAudio() {
+  const fileInput = document.getElementById('f_ref_audio_file');
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  const statusEl = document.getElementById('refUploadStatus');
+  statusEl.textContent = 'アップロード中...';
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  try {
+    const r = await fetch('/api/voice-presets/upload_reference', { method: 'POST', body: fd });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok) {
+      setVal('f_reference_audio_path', data.reference_audio_path);
+      document.getElementById('refAudioInfo').textContent =
+        `設定済み: ${data.filename} (${(data.size_bytes/1024).toFixed(0)} KB)`;
+      statusEl.textContent = '✓ アップロード完了';
+      markDirty();
+    } else {
+      statusEl.textContent = '失敗: ' + (data.detail || JSON.stringify(data));
+    }
+  } catch(err) {
+    statusEl.textContent = 'エラー: ' + err.message;
+  }
+}
+
+// ── Build synthesis_params from form ──────────────────────────────────────────
+
+function buildSynthesisParams() {
+  return {
+    language: 'ja',
+    speaker_name: document.getElementById('f_speaker_name')?.value || null,
+    instruct: document.getElementById('f_instruct')?.value || null,
+    voice_description: document.getElementById('f_voice_description')?.value || null,
+    reference_audio_path: document.getElementById('f_reference_audio_path')?.value || null,
+    reference_text: document.getElementById('f_reference_text')?.value || null,
+    speed: parseFloat(document.getElementById('f_speed')?.value || '1.0'),
+    pause_ms_before: parseInt(document.getElementById('f_pause_before')?.value || '0'),
+    pause_ms_after: parseInt(document.getElementById('f_pause_after')?.value || '300'),
+    volume_gain_db: parseFloat(document.getElementById('f_volume_db')?.value || '0'),
+  };
+}
+
+// ── Preview generation ───────────────────────────────────────────────────────
+
+async function generatePreview() {
+  const btn = document.getElementById('btnPreview');
+  const errEl = document.getElementById('previewError');
+  const wrapEl = document.getElementById('previewAudioWrap');
+  btn.disabled = true;
+  btn.textContent = '⏳ 生成中...';
+  errEl.style.display = 'none';
+  wrapEl.style.display = 'none';
+
+  const params = buildSynthesisParams();
+  const body = {
+    text: document.getElementById('previewText')?.value || 'こんにちは。',
+    engine_type: currentWorkerType,
+    language: params.language,
+    speaker_name: params.speaker_name,
+    instruct: params.instruct,
+    voice_description: params.voice_description,
+    reference_audio_path: params.reference_audio_path,
+    reference_text: params.reference_text,
+    speed: params.speed,
+  };
+
+  try {
+    const r = await fetch('/api/voice-presets/preview_sample', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok) {
+      const audio = document.getElementById('previewAudio');
+      audio.src = data.preview_url + '?t=' + Date.now();
+      audio.load();
+      wrapEl.style.display = '';
+      const meta = document.getElementById('previewAudioMeta');
+      if (meta && data.duration_seconds) {
+        meta.textContent = `長さ: ${data.duration_seconds.toFixed(1)}秒  /  エンジン: ${data.engine_type}`;
+      }
+    } else {
+      errEl.textContent = '生成失敗: ' + (data.detail || JSON.stringify(data));
+      errEl.style.display = '';
+    }
+  } catch(err) {
+    errEl.textContent = 'エラー: ' + err.message;
+    errEl.style.display = '';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ サンプル音声を生成';
+  }
+}
+
+function clearPreviewAudio() {
+  document.getElementById('previewAudioWrap').style.display = 'none';
+  document.getElementById('previewError').style.display = 'none';
+  const audio = document.getElementById('previewAudio');
+  if (audio) { try { audio.pause(); } catch(_) {} audio.src = ''; }
+}
+
+// ── Save / Delete preset ─────────────────────────────────────────────────────
+
+async function savePreset() {
+  const name = (document.getElementById('f_name')?.value || '').trim();
+  if (!name) { alert('プリセット名を入力してください'); return; }
+
+  const body = {
+    name,
+    description: document.getElementById('f_description')?.value || '',
+    engine_type: currentWorkerType,
+    synthesis_params: buildSynthesisParams(),
+    reference_metadata: {},
+  };
+
+  const statusEl = document.getElementById('saveStatus');
+  const btn = document.getElementById('btnSave');
+  btn.disabled = true;
+  statusEl.textContent = '保存中...';
+  statusEl.style.color = '';
+
+  try {
+    const url = currentPresetId ? `/api/voice-presets/${currentPresetId}` : '/api/voice-presets';
+    const method = currentPresetId ? 'PUT' : 'POST';
+    const r = await fetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok) {
+      statusEl.textContent = '✓ 保存完了';
+      statusEl.style.color = '#276749';
+      isDirty = false;
+      currentPresetId = data.preset_id;
+      document.getElementById('btnDelete').style.display = '';
+      await loadPresets();
+    } else {
+      statusEl.textContent = '失敗: ' + (data.detail || JSON.stringify(data));
+      statusEl.style.color = '#c53030';
+    }
+  } catch(err) {
+    statusEl.textContent = 'エラー: ' + err.message;
+    statusEl.style.color = '#c53030';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function deleteCurrentPreset() {
+  if (!currentPresetId) return;
+  if (!confirm('このプリセットを削除しますか？')) return;
+  try {
+    const r = await fetch(`/api/voice-presets/${currentPresetId}`, { method: 'DELETE' });
+    if (r.ok) {
+      currentPresetId = null;
+      isDirty = false;
+      await loadPresets();
+      newPreset();
+    } else {
+      alert('削除に失敗しました');
+    }
+  } catch(err) {
+    alert('エラー: ' + err.message);
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+(async function init() {
+  await loadPresets();
+  newPreset();
+})();
+</script>
+{% endblock %}
