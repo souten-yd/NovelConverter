@@ -57,7 +57,7 @@
           </select>
         </label>
         <label>言語
-          <input type="text" class="input vm-field" data-field="language" value="{{ vp.language if vp else 'ja' }}">
+          <input type="text" class="input vm-field" data-field="language" value="{{ vp.language if vp else 'japanese' }}">
         </label>
         <label>スピード
           <input type="number" class="input vm-field" data-field="speed" value="{{ vp.speed if vp else 1.0 }}" step="0.1" min="0.5" max="2.0">
@@ -213,7 +213,7 @@ async function testVoice(speakerId, speakerName) {
     preset_id: data.profile.preset_id,
     worker_type: data.profile.worker_type || 'custom',
     text: testText,
-    language: data.profile.language || 'ja',
+    language: data.profile.language || 'japanese',
     speaker_name: data.profile.speaker_name || null,
     instruct: data.profile.instruct || null,
     voice_description: data.profile.voice_description || null,

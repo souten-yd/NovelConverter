@@ -43,13 +43,13 @@ def test_custom_uses_generate_custom_voice(monkeypatch, tmp_path):
     synth._processor = object()
     synth._load_error = None
     synth._supported_speakers = ["Aria"]
-    synth._supported_languages = ["ja", "en"]
+    synth._supported_languages = ["japanese", "english"]
 
     req = SynthesizeRequest(text="こんにちは", speaker="Aria", language="ja", instruct="明るく", output_path=str(tmp_path / "c.wav"))
     res = synth.synthesize(req)
 
     assert res.success is True
-    assert called == {"text": "こんにちは", "language": "ja", "speaker": "Aria", "instruct": "明るく"}
+    assert called == {"text": "こんにちは", "language": "japanese", "speaker": "Aria", "instruct": "明るく"}
 
 
 def test_design_maps_voice_description_to_instruct(monkeypatch, tmp_path):
@@ -77,7 +77,7 @@ def test_design_maps_voice_description_to_instruct(monkeypatch, tmp_path):
     res = synth.synthesize(req)
 
     assert res.success is True
-    assert called == {"text": "テスト", "language": "ja", "instruct": "落ち着いた声"}
+    assert called == {"text": "テスト", "language": "japanese", "instruct": "落ち着いた声"}
 
 
 def test_clone_uses_generate_voice_clone(monkeypatch, tmp_path):
@@ -111,7 +111,7 @@ def test_clone_uses_generate_voice_clone(monkeypatch, tmp_path):
     assert res.success is True
     assert called == {
         "text": "テスト",
-        "language": "ja",
+        "language": "japanese",
         "ref_audio": str(ref_audio),
         "ref_text": "これは参照音声です",
     }
@@ -157,6 +157,6 @@ def test_clone_prompt_fallback_uses_generate_voice_clone(monkeypatch, tmp_path):
     }
     assert called["generate"] == {
         "text": "テスト",
-        "language": "ja",
+        "language": "japanese",
         "voice_clone_prompt": "PROMPT",
     }

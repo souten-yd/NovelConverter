@@ -648,7 +648,7 @@ function buildVoiceBody() {
   return {
     worker_type: currentWorkerType,
     preset_id: document.getElementById('f_preset_id')?.value || null,
-    language: 'ja',
+    language: 'japanese',
     speaker_name: document.getElementById('f_speaker_name')?.value || null,
     instruct: document.getElementById('f_instruct')?.value || null,
     voice_description: document.getElementById('f_voice_description')?.value || null,
@@ -670,7 +670,7 @@ async function saveVoiceMapping() {
 
   const profile = {
     worker_type: currentWorkerType,
-    language: 'ja',
+    language: 'japanese',
     speaker_name: document.getElementById('f_speaker_name')?.value || null,
     instruct: document.getElementById('f_instruct')?.value || null,
     voice_description: document.getElementById('f_voice_description')?.value || null,
