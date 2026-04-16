@@ -13,6 +13,7 @@ from typing import Optional
 
 from app.shared.schemas import SynthesizeRequest, SynthesizeResponse
 from app.shared.logger import get_logger
+from app.shared.language_codes import normalize_tts_language
 
 logger = get_logger("synth.design")
 
@@ -263,7 +264,7 @@ class Qwen3DesignSynthesizer:
 
             output = self._model.generate_voice_design(
                 text=req.text,
-                language=req.language or "ja",
+                language=normalize_tts_language(req.language),
                 instruct=voice_description,
             )
             audio_np, sample_rate = _extract_first_audio_and_rate(output, default_sample_rate=24000)

@@ -12,6 +12,7 @@ from typing import Optional
 
 from app.shared.schemas import SynthesizeRequest, SynthesizeResponse
 from app.shared.logger import get_logger
+from app.shared.language_codes import normalize_tts_language
 
 logger = get_logger("synth.base")
 
@@ -269,6 +270,7 @@ class Qwen3BaseSynthesizer:
             from app.shared.audio_validator import validate_audio_array
 
             use_reusable_prompt = bool((req.extra or {}).get("use_voice_clone_prompt"))
+            language = normalize_tts_language(req.language)
 
             if use_reusable_prompt and hasattr(self._model, "create_voice_clone_prompt") and hasattr(self._model, "generate_voice_clone"):
                 clone_prompt = self._model.create_voice_clone_prompt(
@@ -277,13 +279,13 @@ class Qwen3BaseSynthesizer:
                 )
                 output = self._model.generate_voice_clone(
                     text=req.text,
-                    language=req.language or "ja",
+                    language=language,
                     voice_clone_prompt=clone_prompt,
                 )
             elif hasattr(self._model, "generate_voice_clone"):
                 output = self._model.generate_voice_clone(
                     text=req.text,
-                    language=req.language or "ja",
+                    language=language,
                     ref_audio=req.reference_audio_path,
                     ref_text=req.reference_text or "",
                 )

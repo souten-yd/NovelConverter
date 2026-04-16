@@ -37,7 +37,7 @@ def _resolve_render_profile(profile: Optional[VoiceProfile], db: Session) -> dic
     """Resolve synthesis parameters from preset_id at render time."""
     resolved = {
         "worker_type": "custom",
-        "language": "ja",
+        "language": "japanese",
         "speaker_name": None,
         "instruct": None,
         "voice_description": None,
@@ -50,7 +50,7 @@ def _resolve_render_profile(profile: Optional[VoiceProfile], db: Session) -> dic
 
     resolved.update({
         "worker_type": profile.worker_type or "custom",
-        "language": profile.language or "ja",
+        "language": profile.language or "japanese",
         "speaker_name": profile.speaker_name,
         "instruct": profile.instruct,
         "voice_description": profile.voice_description,

@@ -90,7 +90,7 @@ def preview_voice_preset(preset_id: str, body: VoicePresetPreviewRequest, db: Se
         text=text,
         worker_type=preset.engine_type,
         output_path=out_path,
-        language=str(synth.get("language", "ja")),
+        language=str(synth.get("language", "japanese")),
         speaker=synth.get("speaker_name"),
         instruct=synth.get("instruct"),
         voice_description=synth.get("voice_description"),
@@ -119,7 +119,7 @@ def preview_voice_preset(preset_id: str, body: VoicePresetPreviewRequest, db: Se
 class InlinePreviewRequest(BaseModel):
     text: str = "こんにちは、よろしくお願いします。"
     engine_type: str = "custom"  # base / custom / design
-    language: str = "ja"
+    language: str = "japanese"
     speaker_name: Optional[str] = None
     instruct: Optional[str] = None
     voice_description: Optional[str] = None
@@ -147,7 +147,7 @@ def preview_sample(body: InlinePreviewRequest):
         text=text,
         worker_type=body.engine_type or "custom",
         output_path=out_path,
-        language=body.language or "ja",
+        language=body.language or "japanese",
         speaker=body.speaker_name,
         instruct=body.instruct,
         voice_description=body.voice_description,

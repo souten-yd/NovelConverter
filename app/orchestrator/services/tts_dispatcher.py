@@ -44,7 +44,7 @@ def synthesize(
     worker_type: str,
     output_path: Path,
     *,
-    language: str = "ja",
+    language: str = "japanese",
     speaker: Optional[str] = None,
     instruct: Optional[str] = None,
     voice_description: Optional[str] = None,

@@ -320,7 +320,7 @@ def segment_speakers_endpoint(
                 )
                 bg_db.add(sp)
                 bg_db.flush()
-                vp = VoiceProfile(speaker_id=sp.id, worker_type="custom", language="ja")
+                vp = VoiceProfile(speaker_id=sp.id, worker_type="custom", language="japanese")
                 bg_db.add(vp)
 
             proj = bg_db.get(Project, project_id)

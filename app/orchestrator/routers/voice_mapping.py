@@ -123,7 +123,7 @@ class VoicePreviewRequest(BaseModel):
     preset_id: Optional[str] = None
     worker_type: str = "custom"        # base / custom / design
     text: str = "こんにちは、よろしくお願いします。"
-    language: str = "ja"
+    language: str = "japanese"
     speaker_name: Optional[str] = None   # custom worker
     instruct: Optional[str] = None       # custom worker
     voice_description: Optional[str] = None  # design worker
@@ -158,7 +158,7 @@ def preview_voice(
             text=resolved.get("text", body.text),
             worker_type=resolved.get("worker_type", "custom"),
             output_path=out_path,
-            language=resolved.get("language") or "ja",
+            language=resolved.get("language") or "japanese",
             speaker=resolved.get("speaker_name"),
             instruct=resolved.get("instruct"),
             voice_description=resolved.get("voice_description"),

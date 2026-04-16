@@ -109,7 +109,7 @@ class VoiceProfile(Base):
     worker_type = Column(String, default="custom")  # base/custom/design
     model_name = Column(String, nullable=True)
     preset_name = Column(String, nullable=True)
-    language = Column(String, default="ja")
+    language = Column(String, default="japanese")
     speaker_name = Column(String, nullable=True)      # for custom worker
     instruct = Column(Text, nullable=True)            # for custom worker
     voice_description = Column(Text, nullable=True)  # for design worker

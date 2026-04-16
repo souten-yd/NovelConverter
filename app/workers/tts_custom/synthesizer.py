@@ -12,6 +12,7 @@ from typing import List, Optional
 
 from app.shared.schemas import SynthesizeRequest, SynthesizeResponse
 from app.shared.logger import get_logger
+from app.shared.language_codes import normalize_tts_language
 
 logger = get_logger("synth.custom")
 
@@ -78,7 +79,7 @@ class Qwen3CustomSynthesizer:
         self._model = None
         self._processor = None
         self._supported_speakers: List[str] = list(_BUILT_IN_SPEAKERS)
-        self._supported_languages: List[str] = ["ja", "en", "zh"]
+        self._supported_languages: List[str] = ["japanese", "english", "chinese"]
         self._load_error: Optional[str] = None
         self._device = "cpu"
         self._model_dir = self.MODEL_ID
@@ -292,7 +293,7 @@ class Qwen3CustomSynthesizer:
                 speaker = "Aria"
 
             # Warn if language not supported
-            lang = req.language or "ja"
+            lang = normalize_tts_language(req.language)
             if lang not in self._supported_languages:
                 logger.warning(f"Language '{lang}' may not be supported. Supported: {self._supported_languages}")
 

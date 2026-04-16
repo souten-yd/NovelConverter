@@ -79,7 +79,7 @@ class VoiceProfileCreate(BaseModel):
     worker_type: str = "custom"
     model_name: Optional[str] = None
     preset_name: Optional[str] = None
-    language: str = "ja"
+    language: str = "japanese"
     speaker_name: Optional[str] = None
     instruct: Optional[str] = None
     voice_description: Optional[str] = None
@@ -139,7 +139,7 @@ class VoiceMappingBatch(BaseModel):
 class SynthesizeRequest(BaseModel):
     text: str
     mode: str = "custom"  # custom / design / clone
-    language: str = "ja"
+    language: str = "japanese"
     # custom
     speaker: Optional[str] = None
     instruct: Optional[str] = None
