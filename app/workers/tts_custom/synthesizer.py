@@ -22,19 +22,28 @@ _DEFAULT_CUSTOM_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 
 # Speaker → pitch (Hz) mapping for mock
 _SPEAKER_PITCHES = {
-    "narrator": 180.0,
-    "Narrator": 180.0,
-    "Aria": 280.0,
-    "aria": 280.0,
+    "aiden": 140.0,
+    "dylan": 150.0,
+    "eric": 160.0,
+    "ono_anna": 260.0,
+    "ryan": 170.0,
+    "serena": 270.0,
+    "sohee": 290.0,
+    "uncle_fu": 120.0,
+    "vivian": 250.0,
     "default": 220.0,
 }
 
-# Fallback built-in speakers (used if model doesn't expose get_supported_speakers)
+# Fallback built-in speakers (used if model doesn't expose get_supported_speakers).
+# Kept in sync with the Qwen3-TTS-12Hz-1.7B-CustomVoice roster.
 _BUILT_IN_SPEAKERS = [
-    "Aria", "Roger", "Sarah", "Laura", "Charlie",
-    "George", "Callum", "River", "Liam", "Charlotte",
-    "Alice", "Matilda", "Will", "Jessica", "Eric", "Chris", "Brian",
+    "aiden", "dylan", "eric", "ono_anna", "ryan",
+    "serena", "sohee", "uncle_fu", "vivian",
 ]
+
+# Default speaker to fall back to when the requested one is unsupported or
+# missing. Picked because it is the Japanese voice in the CustomVoice roster.
+_DEFAULT_SPEAKER = "ono_anna"
 
 
 class MockSynthesizer:
@@ -57,7 +66,7 @@ class MockSynthesizer:
     def synthesize(self, req: SynthesizeRequest) -> SynthesizeResponse:
         out_path = _resolve_output_path(req.output_path, "custom")
         try:
-            freq = _SPEAKER_PITCHES.get(req.speaker or "default", 220.0)
+            freq = _SPEAKER_PITCHES.get((req.speaker or "").lower() or "default", 220.0)
             _write_tone_wav(out_path, req.text, frequency=freq, speed=req.speed)
             return SynthesizeResponse(
                 success=True,
@@ -282,15 +291,25 @@ class Qwen3CustomSynthesizer:
             import soundfile as sf
             from app.shared.audio_validator import validate_audio_array
 
-            speaker = req.speaker or "Aria"
+            requested_speaker = (req.speaker or "").strip()
+            speaker = requested_speaker or _DEFAULT_SPEAKER
 
-            # Warn if speaker not in supported list
+            # Warn if speaker not in supported list, try case-insensitive match first.
             if speaker not in self._supported_speakers:
-                logger.warning(
-                    f"Speaker '{speaker}' not in supported list: {self._supported_speakers}. "
-                    f"Falling back to 'Aria'."
-                )
-                speaker = "Aria"
+                lower_map = {s.lower(): s for s in self._supported_speakers}
+                match = lower_map.get(speaker.lower())
+                if match:
+                    logger.info(f"Speaker '{speaker}' normalized to '{match}'")
+                    speaker = match
+                else:
+                    fallback = _DEFAULT_SPEAKER if _DEFAULT_SPEAKER in self._supported_speakers else (
+                        self._supported_speakers[0] if self._supported_speakers else _DEFAULT_SPEAKER
+                    )
+                    logger.warning(
+                        f"Speaker '{speaker}' not in supported list: {self._supported_speakers}. "
+                        f"Falling back to '{fallback}'."
+                    )
+                    speaker = fallback
 
             # Warn if language not supported
             lang = normalize_tts_language(req.language)
@@ -344,7 +363,11 @@ class Qwen3CustomSynthesizer:
                     out_path.unlink()
                 except OSError:
                     pass
-            return SynthesizeResponse(success=False, error=str(e), worker_id="qwen3-custom")
+            return SynthesizeResponse(
+                success=False,
+                error=_format_exception(e),
+                worker_id="qwen3-custom",
+            )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -375,6 +398,19 @@ def _resolve_output_path(requested: Optional[str], prefix: str) -> Path:
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
     import uuid
     return TEMP_DIR / f"{prefix}_{uuid.uuid4().hex[:8]}.wav"
+
+
+def _format_exception(exc: BaseException) -> str:
+    """Return a non-empty error string for ``exc``.
+
+    ``str(exc)`` can be empty (bare ``Exception()`` or argless raise), which
+    leaves the UI displaying nothing useful. Fall back to the exception class
+    name so the caller always gets a diagnosable message.
+    """
+    message = str(exc).strip()
+    if message:
+        return f"{type(exc).__name__}: {message}"
+    return f"{type(exc).__name__} (no message)"
 
 
 def _estimate_duration(text: str, speed: float = 1.0) -> float:

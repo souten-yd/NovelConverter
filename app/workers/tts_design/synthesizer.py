@@ -298,7 +298,11 @@ class Qwen3DesignSynthesizer:
                     out_path.unlink()
                 except OSError:
                     pass
-            return SynthesizeResponse(success=False, error=str(e), worker_id="qwen3-design")
+            return SynthesizeResponse(
+                success=False,
+                error=_format_exception(e),
+                worker_id="qwen3-design",
+            )
 
 
 def _resolve_output_path(requested: Optional[str], prefix: str) -> Path:
@@ -327,6 +331,19 @@ def _extract_first_audio_and_rate(output, default_sample_rate: int = 24000):
     if hasattr(wavs, "squeeze"):
         wavs = wavs.squeeze()
     return wavs, sample_rate
+
+
+def _format_exception(exc: BaseException) -> str:
+    """Return a non-empty error string for ``exc``.
+
+    ``str(exc)`` can be empty (bare ``Exception()`` or argless raise), which
+    leaves the UI displaying nothing useful. Fall back to the exception class
+    name so the caller always gets a diagnosable message.
+    """
+    message = str(exc).strip()
+    if message:
+        return f"{type(exc).__name__}: {message}"
+    return f"{type(exc).__name__} (no message)"
 
 
 def _estimate_duration(text: str, speed: float = 1.0) -> float:

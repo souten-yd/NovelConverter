@@ -42,14 +42,14 @@ def test_custom_uses_generate_custom_voice(monkeypatch, tmp_path):
     synth._model = _Model()
     synth._processor = object()
     synth._load_error = None
-    synth._supported_speakers = ["Aria"]
+    synth._supported_speakers = ["ono_anna"]
     synth._supported_languages = ["japanese", "english"]
 
-    req = SynthesizeRequest(text="こんにちは", speaker="Aria", language="ja", instruct="明るく", output_path=str(tmp_path / "c.wav"))
+    req = SynthesizeRequest(text="こんにちは", speaker="ono_anna", language="ja", instruct="明るく", output_path=str(tmp_path / "c.wav"))
     res = synth.synthesize(req)
 
     assert res.success is True
-    assert called == {"text": "こんにちは", "language": "japanese", "speaker": "Aria", "instruct": "明るく"}
+    assert called == {"text": "こんにちは", "language": "japanese", "speaker": "ono_anna", "instruct": "明るく"}
 
 
 def test_design_maps_voice_description_to_instruct(monkeypatch, tmp_path):
