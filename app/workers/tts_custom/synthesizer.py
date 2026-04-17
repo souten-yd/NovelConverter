@@ -13,6 +13,11 @@ from typing import List, Optional
 from app.shared.schemas import SynthesizeRequest, SynthesizeResponse
 from app.shared.logger import get_logger
 from app.shared.language_codes import normalize_tts_language
+from app.shared.qwen3_runtime import (
+    DEFAULT_MAX_NEW_TOKENS,
+    build_load_kwargs,
+    format_exception as _format_exception,
+)
 
 logger = get_logger("synth.custom")
 
@@ -22,19 +27,28 @@ _DEFAULT_CUSTOM_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 
 # Speaker → pitch (Hz) mapping for mock
 _SPEAKER_PITCHES = {
-    "narrator": 180.0,
-    "Narrator": 180.0,
-    "Aria": 280.0,
-    "aria": 280.0,
+    "aiden": 140.0,
+    "dylan": 150.0,
+    "eric": 160.0,
+    "ono_anna": 260.0,
+    "ryan": 170.0,
+    "serena": 270.0,
+    "sohee": 290.0,
+    "uncle_fu": 120.0,
+    "vivian": 250.0,
     "default": 220.0,
 }
 
-# Fallback built-in speakers (used if model doesn't expose get_supported_speakers)
+# Fallback built-in speakers (used if model doesn't expose get_supported_speakers).
+# Kept in sync with the Qwen3-TTS-12Hz-1.7B-CustomVoice roster.
 _BUILT_IN_SPEAKERS = [
-    "Aria", "Roger", "Sarah", "Laura", "Charlie",
-    "George", "Callum", "River", "Liam", "Charlotte",
-    "Alice", "Matilda", "Will", "Jessica", "Eric", "Chris", "Brian",
+    "aiden", "dylan", "eric", "ono_anna", "ryan",
+    "serena", "sohee", "uncle_fu", "vivian",
 ]
+
+# Default speaker to fall back to when the requested one is unsupported or
+# missing. Picked because it is the Japanese voice in the CustomVoice roster.
+_DEFAULT_SPEAKER = "ono_anna"
 
 
 class MockSynthesizer:
@@ -57,7 +71,7 @@ class MockSynthesizer:
     def synthesize(self, req: SynthesizeRequest) -> SynthesizeResponse:
         out_path = _resolve_output_path(req.output_path, "custom")
         try:
-            freq = _SPEAKER_PITCHES.get(req.speaker or "default", 220.0)
+            freq = _SPEAKER_PITCHES.get((req.speaker or "").lower() or "default", 220.0)
             _write_tone_wav(out_path, req.text, frequency=freq, speed=req.speed)
             return SynthesizeResponse(
                 success=True,
@@ -77,7 +91,6 @@ class Qwen3CustomSynthesizer:
 
     def __init__(self):
         self._model = None
-        self._processor = None
         self._supported_speakers: List[str] = list(_BUILT_IN_SPEAKERS)
         self._supported_languages: List[str] = ["japanese", "english", "chinese"]
         self._load_error: Optional[str] = None
@@ -110,7 +123,6 @@ class Qwen3CustomSynthesizer:
             import qwen_tts
             import torch
             import torchaudio
-            from transformers import AutoProcessor
             from qwen_tts import Qwen3TTSModel
 
             self._model_dir = self._resolve_model_path()
@@ -122,8 +134,6 @@ class Qwen3CustomSynthesizer:
             self._sys_path = list(sys.path)
             self._import_status = self._collect_import_status()
             self._pip_show_qwen_tts = self._collect_pip_show()
-            self._dtype = "float16" if selected_device == "cuda" else "float32"
-            self._attention_backend = "sdpa" if selected_device == "cuda" else "eager"
 
             logger.info(f"sys.executable={self._python_executable}")
             logger.info(f"sys.path={self._sys_path}")
@@ -147,44 +157,55 @@ class Qwen3CustomSynthesizer:
                     self._cpu_fallback_reason,
                 )
 
-            logger.info(f"Loading Qwen3-TTS Custom from {self._model_dir}")
-            self._processor = AutoProcessor.from_pretrained(
-                self._model_dir,
-                trust_remote_code=True,
-                fix_mistral_regex=True,
-            )
-            self._model = Qwen3TTSModel.from_pretrained(
-                self._model_dir,
-                trust_remote_code=True,
-            )
+            load_kwargs, dtype_name, attn_name = build_load_kwargs(torch, selected_device)
+            self._dtype = dtype_name
+            self._attention_backend = attn_name
 
-            if hasattr(self._model, "to"):
-                try:
-                    self._model = self._model.to(selected_device)
-                except Exception as move_error:
-                    if selected_device == "cuda":
-                        self._used_cpu_fallback = True
-                        self._cpu_fallback_reason = f"CUDA move failed: {move_error}"
-                        logger.error(
-                            "Failed to move model to CUDA (%s); falling back to CPU.",
-                            move_error,
-                        )
-                        self._model = self._model.to("cpu")
-                        selected_device = "cpu"
-                    else:
-                        raise
+            logger.info(f"Loading Qwen3-TTS Custom from {self._model_dir} (kwargs={list(load_kwargs)})")
+            try:
+                self._model = Qwen3TTSModel.from_pretrained(
+                    self._model_dir,
+                    trust_remote_code=True,
+                    **load_kwargs,
+                )
+            except Exception as load_error:
+                if selected_device == "cuda":
+                    self._used_cpu_fallback = True
+                    self._cpu_fallback_reason = f"CUDA load failed: {load_error}"
+                    logger.error(
+                        "Failed to load model on CUDA (%s); retrying on CPU.",
+                        load_error,
+                    )
+                    selected_device = "cpu"
+                    load_kwargs, dtype_name, attn_name = build_load_kwargs(torch, selected_device)
+                    self._dtype = dtype_name
+                    self._attention_backend = attn_name
+                    self._model = Qwen3TTSModel.from_pretrained(
+                        self._model_dir,
+                        trust_remote_code=True,
+                        **load_kwargs,
+                    )
+                else:
+                    raise
+
+            if "device_map" not in load_kwargs and hasattr(self._model, "to"):
+                self._model = self._model.to(selected_device)
 
             # Try to get supported speakers/languages from model
             if hasattr(self._model, "get_supported_speakers"):
                 try:
-                    self._supported_speakers = list(self._model.get_supported_speakers())
+                    speakers = list(self._model.get_supported_speakers())
+                    # Normalise to lowercase to match the validator inside qwen-tts
+                    # (see "Unsupported speakers" error which always reports lowercase).
+                    self._supported_speakers = [s.lower() for s in speakers]
                     logger.info(f"Model speakers: {self._supported_speakers}")
                 except Exception as e:
                     logger.warning(f"Could not get speakers from model: {e}")
 
             if hasattr(self._model, "get_supported_languages"):
                 try:
-                    self._supported_languages = list(self._model.get_supported_languages())
+                    langs = list(self._model.get_supported_languages())
+                    self._supported_languages = [l.lower() for l in langs]
                     logger.info(f"Model languages: {self._supported_languages}")
                 except Exception as e:
                     logger.warning(f"Could not get languages from model: {e}")
@@ -192,8 +213,10 @@ class Qwen3CustomSynthesizer:
             self._device = selected_device
             self._load_error = None
             logger.info(
-                "Qwen3-TTS Custom loaded OK (device=%s, cpu_fallback=%s)",
+                "Qwen3-TTS Custom loaded OK (device=%s, dtype=%s, attn=%s, cpu_fallback=%s)",
                 self._device,
+                self._dtype,
+                self._attention_backend,
                 self._used_cpu_fallback,
             )
         except Exception as e:
@@ -206,11 +229,10 @@ class Qwen3CustomSynthesizer:
             self._load_error = err_msg
             logger.exception("Failed to load Qwen3-TTS Custom")
             self._model = None
-            self._processor = None
             self._device = "cpu"
 
     def is_loaded(self) -> bool:
-        return self._model is not None and self._processor is not None
+        return self._model is not None
 
     def get_load_error(self) -> Optional[str]:
         return self._load_error
@@ -282,15 +304,20 @@ class Qwen3CustomSynthesizer:
             import soundfile as sf
             from app.shared.audio_validator import validate_audio_array
 
-            speaker = req.speaker or "Aria"
+            # Qwen3-TTS-12Hz-1.7B-CustomVoice validates speakers case-insensitively
+            # (error message always reports names lowercased), so normalise here too.
+            requested_speaker = (req.speaker or "").strip().lower()
+            speaker = requested_speaker or _DEFAULT_SPEAKER
 
-            # Warn if speaker not in supported list
             if speaker not in self._supported_speakers:
+                fallback = _DEFAULT_SPEAKER if _DEFAULT_SPEAKER in self._supported_speakers else (
+                    self._supported_speakers[0] if self._supported_speakers else _DEFAULT_SPEAKER
+                )
                 logger.warning(
                     f"Speaker '{speaker}' not in supported list: {self._supported_speakers}. "
-                    f"Falling back to 'Aria'."
+                    f"Falling back to '{fallback}'."
                 )
-                speaker = "Aria"
+                speaker = fallback
 
             # Warn if language not supported
             lang = normalize_tts_language(req.language)
@@ -308,6 +335,7 @@ class Qwen3CustomSynthesizer:
                 "text": req.text,
                 "language": lang,
                 "speaker": speaker,
+                "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
             }
             if req.instruct:
                 generation_kwargs["instruct"] = req.instruct
@@ -344,7 +372,11 @@ class Qwen3CustomSynthesizer:
                     out_path.unlink()
                 except OSError:
                     pass
-            return SynthesizeResponse(success=False, error=str(e), worker_id="qwen3-custom")
+            return SynthesizeResponse(
+                success=False,
+                error=_format_exception(e),
+                worker_id="qwen3-custom",
+            )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

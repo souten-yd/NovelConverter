@@ -92,11 +92,12 @@ def synthesize(
                 if result.success:
                     logger.info(f"Synthesized segment → {output_path} via {worker_type}")
                     return result
-                last_error = result.error or "unknown error"
+                last_error = (result.error or "").strip() or f"{worker_type} worker returned an empty error"
                 logger.warning(f"Worker returned failure (attempt {attempt}): {last_error}")
             except Exception as e:
-                last_error = str(e)
-                logger.warning(f"Synthesis attempt {attempt} failed: {e}")
+                message = str(e).strip()
+                last_error = f"{type(e).__name__}: {message}" if message else f"{type(e).__name__} (no message)"
+                logger.warning(f"Synthesis attempt {attempt} failed: {last_error}")
 
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_DELAY * attempt)

@@ -270,7 +270,7 @@ def suggest_voice(
 各要素は以下の形式にしてください:
 {{"worker_type": "custom" または "design", "speaker_name": "Qwen3-TTSの話者名またはnull", "instruct": "音声指示またはnull", "voice_description": "声の説明文（design時）またはnull", "reason": "この提案の根拠"}}
 
-Qwen3-TTSの使用可能な話者: Aria, Roger, Sarah, Laura, Charlie, George, Callum, River, Liam, Charlotte, Alice, Matilda, Will, Jessica, Eric, Chris, Brian
+Qwen3-TTSの使用可能な話者: aiden, dylan, eric, ono_anna, ryan, serena, sohee, uncle_fu, vivian
 
 セリフ例:
 {dialogue_text}
@@ -357,7 +357,6 @@ def tts_custom_speakers():
     except Exception:
         # Return default known speaker list as fallback
         return [
-            "Aria", "Roger", "Sarah", "Laura", "Charlie", "George",
-            "Callum", "River", "Liam", "Charlotte", "Alice", "Matilda",
-            "Will", "Jessica", "Eric", "Chris", "Brian",
+            "aiden", "dylan", "eric", "ono_anna", "ryan",
+            "serena", "sohee", "uncle_fu", "vivian",
         ]

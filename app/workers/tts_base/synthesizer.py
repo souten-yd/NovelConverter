@@ -13,6 +13,11 @@ from typing import Optional
 from app.shared.schemas import SynthesizeRequest, SynthesizeResponse
 from app.shared.logger import get_logger
 from app.shared.language_codes import normalize_tts_language
+from app.shared.qwen3_runtime import (
+    DEFAULT_MAX_NEW_TOKENS,
+    build_load_kwargs,
+    format_exception as _format_exception,
+)
 
 logger = get_logger("synth.base")
 
@@ -64,7 +69,6 @@ class Qwen3BaseSynthesizer:
 
     def __init__(self):
         self._model = None
-        self._processor = None
         self._load_error: Optional[str] = None
         self._device = "cpu"
         self._model_dir = self.MODEL_ID
@@ -96,7 +100,6 @@ class Qwen3BaseSynthesizer:
             import qwen_tts
             import torch
             import torchaudio
-            from transformers import AutoProcessor
             from qwen_tts import Qwen3TTSModel
 
             self._model_dir = self._resolve_model_path()
@@ -108,8 +111,6 @@ class Qwen3BaseSynthesizer:
             self._sys_path = list(sys.path)
             self._import_status = self._collect_import_status()
             self._pip_show_qwen_tts = self._collect_pip_show()
-            self._dtype = "float16" if selected_device == "cuda" else "float32"
-            self._attention_backend = "sdpa" if selected_device == "cuda" else "eager"
 
             logger.info(f"sys.executable={self._python_executable}")
             logger.info(f"sys.path={self._sys_path}")
@@ -133,38 +134,47 @@ class Qwen3BaseSynthesizer:
                     self._cpu_fallback_reason,
                 )
 
-            logger.info(f"Loading Qwen3-TTS Base model from {self._model_dir}")
-            self._processor = AutoProcessor.from_pretrained(
-                self._model_dir,
-                trust_remote_code=True,
-                fix_mistral_regex=True,
-            )
-            self._model = Qwen3TTSModel.from_pretrained(
-                self._model_dir,
-                trust_remote_code=True,
-            )
+            load_kwargs, dtype_name, attn_name = build_load_kwargs(torch, selected_device)
+            self._dtype = dtype_name
+            self._attention_backend = attn_name
 
-            if hasattr(self._model, "to"):
-                try:
-                    self._model = self._model.to(selected_device)
-                except Exception as move_error:
-                    if selected_device == "cuda":
-                        self._used_cpu_fallback = True
-                        self._cpu_fallback_reason = f"CUDA move failed: {move_error}"
-                        logger.error(
-                            "Failed to move model to CUDA (%s); falling back to CPU.",
-                            move_error,
-                        )
-                        self._model = self._model.to("cpu")
-                        selected_device = "cpu"
-                    else:
-                        raise
+            logger.info(f"Loading Qwen3-TTS Base model from {self._model_dir} (kwargs={list(load_kwargs)})")
+            try:
+                self._model = Qwen3TTSModel.from_pretrained(
+                    self._model_dir,
+                    trust_remote_code=True,
+                    **load_kwargs,
+                )
+            except Exception as load_error:
+                if selected_device == "cuda":
+                    self._used_cpu_fallback = True
+                    self._cpu_fallback_reason = f"CUDA load failed: {load_error}"
+                    logger.error(
+                        "Failed to load model on CUDA (%s); retrying on CPU.",
+                        load_error,
+                    )
+                    selected_device = "cpu"
+                    load_kwargs, dtype_name, attn_name = build_load_kwargs(torch, selected_device)
+                    self._dtype = dtype_name
+                    self._attention_backend = attn_name
+                    self._model = Qwen3TTSModel.from_pretrained(
+                        self._model_dir,
+                        trust_remote_code=True,
+                        **load_kwargs,
+                    )
+                else:
+                    raise
+
+            if "device_map" not in load_kwargs and hasattr(self._model, "to"):
+                self._model = self._model.to(selected_device)
 
             self._device = selected_device
             self._load_error = None
             logger.info(
-                "Qwen3-TTS Base loaded OK (device=%s, cpu_fallback=%s)",
+                "Qwen3-TTS Base loaded OK (device=%s, dtype=%s, attn=%s, cpu_fallback=%s)",
                 self._device,
+                self._dtype,
+                self._attention_backend,
                 self._used_cpu_fallback,
             )
         except Exception as e:
@@ -177,11 +187,10 @@ class Qwen3BaseSynthesizer:
             self._load_error = err_msg
             logger.exception("Failed to load Qwen3-TTS Base")
             self._model = None
-            self._processor = None
             self._device = "cpu"
 
     def is_loaded(self) -> bool:
-        return self._model is not None and self._processor is not None
+        return self._model is not None
 
     def get_load_error(self) -> Optional[str]:
         return self._load_error
@@ -281,6 +290,7 @@ class Qwen3BaseSynthesizer:
                     text=req.text,
                     language=language,
                     voice_clone_prompt=clone_prompt,
+                    max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
                 )
             elif hasattr(self._model, "generate_voice_clone"):
                 output = self._model.generate_voice_clone(
@@ -288,6 +298,7 @@ class Qwen3BaseSynthesizer:
                     language=language,
                     ref_audio=req.reference_audio_path,
                     ref_text=req.reference_text or "",
+                    max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
                 )
             else:
                 return SynthesizeResponse(
@@ -328,7 +339,11 @@ class Qwen3BaseSynthesizer:
                     out_path.unlink()
                 except OSError:
                     pass
-            return SynthesizeResponse(success=False, error=str(e), worker_id="qwen3-base")
+            return SynthesizeResponse(
+                success=False,
+                error=_format_exception(e),
+                worker_id="qwen3-base",
+            )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
