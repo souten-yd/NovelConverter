@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import types
 
+from app.shared.qwen3_runtime import DEFAULT_MAX_NEW_TOKENS
 from app.shared.schemas import SynthesizeRequest
 from app.workers.tts_base.synthesizer import Qwen3BaseSynthesizer
 from app.workers.tts_custom.synthesizer import Qwen3CustomSynthesizer
@@ -40,16 +41,21 @@ def test_custom_uses_generate_custom_voice(monkeypatch, tmp_path):
 
     synth = Qwen3CustomSynthesizer.__new__(Qwen3CustomSynthesizer)
     synth._model = _Model()
-    synth._processor = object()
     synth._load_error = None
     synth._supported_speakers = ["ono_anna"]
     synth._supported_languages = ["japanese", "english"]
 
-    req = SynthesizeRequest(text="こんにちは", speaker="ono_anna", language="ja", instruct="明るく", output_path=str(tmp_path / "c.wav"))
+    req = SynthesizeRequest(text="こんにちは", speaker="Ono_Anna", language="ja", instruct="明るく", output_path=str(tmp_path / "c.wav"))
     res = synth.synthesize(req)
 
     assert res.success is True
-    assert called == {"text": "こんにちは", "language": "japanese", "speaker": "ono_anna", "instruct": "明るく"}
+    assert called == {
+        "text": "こんにちは",
+        "language": "japanese",
+        "speaker": "ono_anna",
+        "instruct": "明るく",
+        "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
+    }
 
 
 def test_design_maps_voice_description_to_instruct(monkeypatch, tmp_path):
@@ -65,7 +71,6 @@ def test_design_maps_voice_description_to_instruct(monkeypatch, tmp_path):
 
     synth = Qwen3DesignSynthesizer.__new__(Qwen3DesignSynthesizer)
     synth._model = _Model()
-    synth._processor = object()
     synth._load_error = None
 
     req = SynthesizeRequest(
@@ -77,7 +82,12 @@ def test_design_maps_voice_description_to_instruct(monkeypatch, tmp_path):
     res = synth.synthesize(req)
 
     assert res.success is True
-    assert called == {"text": "テスト", "language": "japanese", "instruct": "落ち着いた声"}
+    assert called == {
+        "text": "テスト",
+        "language": "japanese",
+        "instruct": "落ち着いた声",
+        "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
+    }
 
 
 def test_clone_uses_generate_voice_clone(monkeypatch, tmp_path):
@@ -95,7 +105,6 @@ def test_clone_uses_generate_voice_clone(monkeypatch, tmp_path):
 
     synth = Qwen3BaseSynthesizer.__new__(Qwen3BaseSynthesizer)
     synth._model = _Model()
-    synth._processor = object()
     synth._load_error = None
     synth.MODEL_ID = "dummy"
 
@@ -114,6 +123,7 @@ def test_clone_uses_generate_voice_clone(monkeypatch, tmp_path):
         "language": "japanese",
         "ref_audio": str(ref_audio),
         "ref_text": "これは参照音声です",
+        "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
     }
 
 
@@ -136,7 +146,6 @@ def test_clone_prompt_fallback_uses_generate_voice_clone(monkeypatch, tmp_path):
 
     synth = Qwen3BaseSynthesizer.__new__(Qwen3BaseSynthesizer)
     synth._model = _Model()
-    synth._processor = object()
     synth._load_error = None
     synth.MODEL_ID = "dummy"
 
@@ -159,4 +168,5 @@ def test_clone_prompt_fallback_uses_generate_voice_clone(monkeypatch, tmp_path):
         "text": "テスト",
         "language": "japanese",
         "voice_clone_prompt": "PROMPT",
+        "max_new_tokens": DEFAULT_MAX_NEW_TOKENS,
     }
