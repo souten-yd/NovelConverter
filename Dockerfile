@@ -153,7 +153,7 @@ RUN python3 -m venv /opt/venvs/ocr \
     && /opt/venvs/ocr/bin/python -m pip cache purge || true \
     && /opt/venvs/ocr/bin/python -m pip install --no-cache-dir \
         paddlepaddle-gpu==3.2.2 \
-        -i https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
+        --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
     && /opt/venvs/ocr/bin/python -m pip install --no-cache-dir \
         paddleocr==3.4.0 \
         paddlex==3.4.3
