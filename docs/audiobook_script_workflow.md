@@ -26,7 +26,13 @@ python scripts/audiobook_script.py analyze /path/book-work
 
 APIが使えない場合、requests.jsonのsystemと各batchに既存characters台帳を添え、
 フロンティアモデルでJSONを作り `responses/batch-00000.json` 等へ保存する。
-後続batchにはそれまでの台帳を渡す。全応答が揃ったら次を実行する。
+後続batchにはそれまでの台帳を渡す。応答は次のenvelope形式で保存する。request_digestはrequests.jsonの該当batchからコピーする。全応答が揃ったら取り込む。
+
+```json
+{"request_digest":"コピーした値", "response":{"characters":[], "annotations":[]}}
+```
+
+prepare時のbatch/context設定をanalyzeが引き継ぐ。設定変更時はprepareからやり直す。別の本文・サンプル・プロンプトの応答は拒否する。
 
 ```bash
 python scripts/audiobook_script.py analyze /path/book-work --responses /path/responses
@@ -34,7 +40,7 @@ python scripts/audiobook_script.py analyze /path/book-work --responses /path/res
 
 これは応答の取り込みであり自動モデル実行ではない。応答を修正して再取り込みした場合、
 古いキャッシュを使わない。API呼び出しは検証済みbatchだけを再利用する。
-API失敗時は同じコマンドで再開できる。プロンプト・本文・台帳・モデル・URLが変われば
+API失敗時は同じコマンドで再開できる。失敗した再解析で古いscript/planを完成物として残さない。プロンプト・本文・台帳・モデル・URLが変われば
 キャッシュが変わる。出力ディレクトリは作品ごとに分け、同時実行しない。
 
 ## 成果物と確認
@@ -87,12 +93,10 @@ voices.jsonは人物ID→固定音声設定。例（未決定の値を実際の�
 python scripts/audiobook_script.py plan /path/book-work voices.json --approvals approvals.json
 ```
 
-同一人物の会話/心内語/感情変化でvoiceを変えない。TTS上限に合わせて
-`--max-chars 200`で分割してもID・感情・原文位置は維持する。現在は文字数分割なので
-最終エンジン導入時に句読点/トークン上限に対応するアダプタを追加する。
+同一人物の会話/心内語/感情変化でvoiceを変えない。ジョブにはkindも保持する。感情/話し方の確信度は人物推定とは別に検証し、未指定の非neutral演技はレビュー対象とする。TTS上限に合わせて
+`--max-chars 200`で分割してもID・感情・原文位置は維持する。句読点付近を優先し、ルビの親文字を途中で切らない。親文字自体が上限より長い場合はエラーにする。トークン上限は最終エンジンのアダプタで対応する。
 参照音声、モデル、発音辞書、seed等をvoice設定へ含めるとキャッシュキーに反映される。
-実ファイルの差し替えもrevision更新が必須。ルビはsource.jsonに保持しており、
-TTSエンジン選定後に発音入力へ適用する（現時点では原文textをそのまま渡す）。
+実ファイルの差し替えもrevision更新が必須。ルビはsource.jsonに親文字のstart/end付きで保持し、各TTSジョブにもジョブ内位置と読みを引き継ぐ。TTSエンジン選定後に発音入力へ適用する（現時点では原文textを書き換えない）。
 
 ## 音声方式決定後の接続契約
 
@@ -119,3 +123,42 @@ textを省略せず、emotion/deliveryは演技指定として渡す。未対応
 ```bash
 python -m unittest discover -s tests -p test_audiobook_script.py -v
 ```
+
+
+## サンプル評価と曖昧な発話の扱い（2026-10-02）
+
+```bash
+python scripts/audiobook_script.py prepare /path/book.epub /path/sample-work \
+  --sample-range 23:67 --sample-range 314:337 --sample-range 3046:3064
+```
+
+範囲は抽出後のblock配列に対する0始まり/end排他。作品ごとに異なる。
+サンプルの離れた範囲同士は文脈として接続しない。同一範囲内のspine切替前後は
+文脈参照を維持する。抽出内容/範囲のdigestを台本に結び付ける。
+
+モデルの位置計算ミスを避けるため、段落全体は`whole_block:true`で返せる。
+複数区間はstart/endまたは原文完全一致のtextを順番に返す。text方式も重複/欠落/改変を拒否する。
+
+「え」「あ」などで人物が不明な場合、標準は従来どおり停止する。
+演出判断として代読を選ぶ場合に限り、`--unresolved-policy narrator --decisions decisions.json`
+を指定する。decisionsは以下の形式。通常のapprovalsだけでは不明話者を解除できない。
+
+```json
+{
+  "segment-id": {
+    "segment_digest": "確認したsegment全体のdigest",
+    "action": "narrator_fallback",
+    "reason": "個別話者の根拠が不足しているため、代読という演出を選択"
+  }
+}
+```
+
+推定speaker_idはunknownのまま、render_speaker_idだけnarratorにする。
+候補人物candidatesと根拠reason/evidenceを保持する。修正後はdigestが変わり
+古い代読指定が無効になる。kindまでunknownの場合は代読指定で通過させない。
+
+ダッシュのみの沈黙をdialogueにするとpossible_silenceのレビュー理由を付ける。
+見出し/沈黙を除外する場合もexcluded_segmentsに原文と理由を残す。
+現時点の沈黙は音声ジョブを生成しないため、秒数付きの間は最終TTS編集段階で決める。
+
+今回のサンプル評価と未評価範囲は[評価記録](audiobook_sample_evaluation.md)を参照。
